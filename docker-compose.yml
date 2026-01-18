@@ -1,0 +1,13 @@
+services:
+  immoplan-ai:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # Passa la chiave API al momento della build
+        - API_KEY=${API_KEY}
+    image: immoplan-ai:latest
+    container_name: immoplan_app
+    ports:
+      - "8080:80"
+    restart: unless-stopped

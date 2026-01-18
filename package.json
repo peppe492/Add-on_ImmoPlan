@@ -1,0 +1,81 @@
+
+{
+  "name": "immoplan-desktop",
+  "version": "1.0.1",
+  "description": "MM's Property Management - Desktop Version",
+  "main": "main.js",
+  "author": "MM Property",
+  "scripts": {
+    "dev": "concurrently \"node server.js\" \"vite\"",
+    "build-react": "tsc && vite build",
+    "preview": "vite preview",
+    "start-server": "node server.js",
+    "electron": "electron .",
+    "electron:bg": "electron . --hidden",
+    "electron:dev": "concurrently \"vite\" \"electron .\"",
+    "dist": "npm run build-react && electron-builder --win --dir && node create-bg-exe.js"
+  },
+  "build": {
+    "appId": "com.mmproperty.app",
+    "productName": "MM Property Manager",
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "public/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "shortcutName": "MM Property Manager",
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    },
+    "files": [
+      "dist/**/*",
+      "public/**/*",
+      "server.js",
+      "main.js",
+      "preload.js",
+      "package.json",
+      "node_modules/**/*"
+    ],
+    "directories": {
+      "buildResources": "assets",
+      "output": "release"
+    },
+    "asar": true
+  },
+  "dependencies": {
+    "@google/genai": "latest",
+    "cors": "^2.8.5",
+    "express": "^4.21.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "recharts": "^2.13.3"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.3",
+    "autoprefixer": "^10.4.20",
+    "concurrently": "^9.1.0",
+    "electron": "^30.0.0",
+    "electron-builder": "^24.13.3",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.15",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.11"
+  }
+}

@@ -1,0 +1,42 @@
+GUIDA AL DEPLOY CON DOCKER
+==========================
+
+Prerequisiti:
+- Docker installato
+- Una API Key di Google Gemini valida
+
+METODO 1: Usando Docker Compose (Consigliato)
+---------------------------------------------
+1. Crea un file `.env` nella root del progetto (se non esiste) e inserisci la tua chiave:
+   API_KEY=la_tua_chiave_gemini_qui
+
+2. Esegui il comando di build e avvio.
+   
+   SE HAI DOCKER RECENTE (V2):
+   docker compose up -d --build
+
+   SE HAI DOCKER VECCHIO (V1/Standalone) O RICEVI ERRORI SUI FLAG:
+   docker-compose up -d --build
+
+3. Apri il browser su: http://localhost:8080
+
+
+METODO 2: Usando Docker Manualmente
+-----------------------------------
+1. Costruisci l'immagine (devi passare la chiave qui perché Vite la "cuoce" nel codice JS):
+   docker build --build-arg API_KEY=la_tua_chiave_gemini_qui -t immoplan-ai .
+
+2. Avvia il container:
+   docker run -d -p 8080:80 --name immoplan_app immoplan-ai
+
+3. Apri il browser su: http://localhost:8080
+
+
+TROUBLESHOOTING
+---------------
+- Errore "unknown shorthand flag: 'd' in -d":
+  Significa che non hai il plugin 'compose' installato per il comando 'docker'.
+  Usa il comando con il trattino: `docker-compose up -d --build`.
+
+- Porta occupata:
+  Modifica `docker-compose.yml` cambiando "8080:80" in una porta libera, es "8081:80".
