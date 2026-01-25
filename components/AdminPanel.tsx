@@ -62,7 +62,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ logs, onResetDatabase })
   };
 
   const handleAddSensor = async () => {
-      if (!newSensor.name || !newSensor.entity_id_suffix || !newSensor.targetId) {
+      if (!newSensor.name || !newSensor.entity_id_suffix || (!newSensor.targetId && newSensor.type !== 'CALENDAR_EVENTS')) {
           alert("Compila tutti i campi!");
           return;
       }
@@ -74,7 +74,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ logs, onResetDatabase })
           name: newSensor.name,
           entity_id_suffix: safeSuffix,
           type: newSensor.type as any,
-          targetId: newSensor.targetId
+          targetId: newSensor.targetId || 'GLOBAL'
       };
 
       const updatedList = [...customSensors, sensor];
@@ -178,13 +178,13 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ logs, onResetDatabase })
                   <div className="space-y-3">
                       <div>
                           <label className="text-[10px] font-bold text-slate-400 uppercase">Nome Visualizzato</label>
-                          <input type="text" value={newSensor.name} onChange={e => setNewSensor({...newSensor, name: e.target.value})} className="w-full bg-white p-2 rounded-lg border border-slate-200 text-sm font-bold" placeholder="Es. Cashflow Via Roma" />
+                          <input type="text" value={newSensor.name} onChange={e => setNewSensor({...newSensor, name: e.target.value})} className="w-full bg-white p-2 rounded-lg border border-slate-200 text-sm font-bold" placeholder="Es. Scadenze Progetto" />
                       </div>
                       <div>
                           <label className="text-[10px] font-bold text-slate-400 uppercase">ID Sensore (Suffisso)</label>
                           <div className="flex items-center gap-1">
                               <span className="text-[10px] text-slate-400">sensor.immoplan_</span>
-                              <input type="text" value={newSensor.entity_id_suffix} onChange={e => setNewSensor({...newSensor, entity_id_suffix: e.target.value})} className="w-full bg-white p-2 rounded-lg border border-slate-200 text-sm font-bold" placeholder="cashflow_viaroma" />
+                              <input type="text" value={newSensor.entity_id_suffix} onChange={e => setNewSensor({...newSensor, entity_id_suffix: e.target.value})} className="w-full bg-white p-2 rounded-lg border border-slate-200 text-sm font-bold" placeholder="calendar_events" />
                           </div>
                       </div>
                       <div>
@@ -193,12 +193,14 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ logs, onResetDatabase })
                               <option value="PROPERTY_CASHFLOW">Cashflow Netto Immobile</option>
                               <option value="PROPERTY_VALUE">Valore Attuale Immobile</option>
                               <option value="CATEGORY_TOTAL">Totale Categoria (es. Mutui)</option>
+                              <option value="CALENDAR_EVENTS">Calendario Scadenze (JSON)</option>
                           </select>
                       </div>
                       <div>
-                          <label className="text-[10px] font-bold text-slate-400 uppercase">Target (Immobile o Categoria)</label>
+                          <label className="text-[10px] font-bold text-slate-400 uppercase">Target</label>
                           <select value={newSensor.targetId || ''} onChange={e => setNewSensor({...newSensor, targetId: e.target.value})} className="w-full bg-white p-2 rounded-lg border border-slate-200 text-sm font-bold">
                               <option value="">Seleziona...</option>
+                              {newSensor.type === 'CALENDAR_EVENTS' && <option value="GLOBAL">Globale (Tutto)</option>}
                               {newSensor.type === 'CATEGORY_TOTAL' ? (
                                   <>
                                     <option value="MORTGAGE">Mutui</option>

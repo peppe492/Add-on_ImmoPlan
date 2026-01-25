@@ -16,24 +16,28 @@ import { db } from './services/dbService';
 const INITIAL_DATA: FinancialData = {
   propertyName: 'Nuovo Progetto',
   totalPrice: 200000,
-  propertyPayments: [], // Inizializzazione array pagamenti prezzo
+  propertyPayments: [],
   totalBudget: 280000,
-  liquidityGiuseppe: 45000,
-  liquidityClaudia: 45000,
+  portfolios: [
+    { id: 'p1', name: 'Conto Corrente G.', owner: 'Giuseppe', initialBalance: 50000 },
+    { id: 'p2', name: 'Conto Corrente C.', owner: 'Claudia', initialBalance: 50000 }
+  ],
   loanPercentage: 80,
   purchaseCosts: {
-    notary: { amount: 3000, isPaid: false, paymentDate: new Date().toISOString().split('T')[0] },
-    agency: { amount: 6000, isPaid: false, paymentDate: new Date().toISOString().split('T')[0] },
-    taxes: { amount: 2000, isPaid: false, paymentDate: new Date().toISOString().split('T')[0] },
-    other: { amount: 0, isPaid: false, paymentDate: new Date().toISOString().split('T')[0] },
+    deposit: { amount: 0, isPaid: false, assignments: [] },
+    balance: { amount: 0, isPaid: false, assignments: [] }, // Saldo al Rogito (Calcolato)
+    notary: { amount: 3000, isPaid: false, assignments: [] },
+    agency: { amount: 6000, isPaid: false, assignments: [] },
+    taxes: { amount: 2000, isPaid: false, assignments: [] },
+    other: { amount: 0, isPaid: false, assignments: [] },
   },
   renovationCosts: {
-    works: 30000,
-    worksBreakdown: [{ id: '1', description: 'Stima lavori edili', amount: 30000, isPaid: false, paymentDate: new Date().toISOString().split('T')[0] }],
-    materials: 10000,
-    materialsBreakdown: [{ id: '1', description: 'Fornitura pavimenti e rivestimenti', amount: 10000, isPaid: false, paymentDate: new Date().toISOString().split('T')[0] }],
-    design: { amount: 2000, isPaid: false, paymentDate: new Date().toISOString().split('T')[0] },
-    contingency: 5000,
+    works: 0,
+    worksBreakdown: [],
+    materials: 0,
+    materialsBreakdown: [],
+    design: { amount: 0, isPaid: false, assignments: [] }, // Impostato a 0
+    contingency: 0, // Impostato a 0
   },
   customSensors: [] 
 };
@@ -63,18 +67,20 @@ const App: React.FC = () => {
       db.getScenarios(),
       db.getLogs()
     ]);
-    if (savedData) setData(savedData);
+    if (savedData) {
+        // Migration check: ensure balance exists if loading old data
+        if (!savedData.purchaseCosts.balance) {
+            savedData.purchaseCosts.balance = { amount: 0, isPaid: false, assignments: [] };
+        }
+        setData(savedData);
+    }
     if (savedScenarios) setScenarios(savedScenarios);
     if (savedLogs) setLogs(savedLogs);
   }, []);
 
   const syncNow = useCallback(async () => {
-    // Controllo blocco centralizzato DBService
     if (db.isSyncBlocked()) return;
-    
-    // Debounce locale
     if (Date.now() - lastSyncRef.current < 5000) return;
-
     const changed = await db.pullFromServer();
     if (changed) {
       await refreshUIFromDB();
@@ -83,7 +89,6 @@ const App: React.FC = () => {
     lastSyncRef.current = Date.now();
   }, [refreshUIFromDB, addLog]);
 
-  // Inizializzazione e Eventi di Sistema
   useEffect(() => {
     db.onLog = addLog;
     const initData = async () => {
@@ -91,36 +96,13 @@ const App: React.FC = () => {
         await db.init();
         await refreshUIFromDB();
       } catch (e) {
-        addLog("Errore connessione database", 'error');
+        addLog("Errore database", 'error');
       } finally {
         setIsLoaded(true);
       }
     };
     initData();
-
-    // Sincronizza quando l'app torna visibile (es. riaprendo il tab o sbloccando il telefono)
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible') {
-        syncNow();
-      }
-    };
-
-    window.addEventListener('visibilitychange', handleVisibilityChange);
-    window.addEventListener('focus', syncNow);
-
-    const pollInterval = setInterval(async () => {
-      const now = Date.now();
-      if (now - lastSyncRef.current > 30000) { // Polling ogni 30s se idle
-        syncNow();
-      }
-    }, 30000);
-
-    return () => {
-      window.removeEventListener('visibilitychange', handleVisibilityChange);
-      window.removeEventListener('focus', syncNow);
-      clearInterval(pollInterval);
-    };
-  }, [addLog, refreshUIFromDB, syncNow]);
+  }, [addLog, refreshUIFromDB]);
 
   useEffect(() => {
     if (isLoaded) {
@@ -142,7 +124,6 @@ const App: React.FC = () => {
     await db.saveScenario(newScenario);
     setScenarios(prev => [newScenario, ...prev]);
     setActiveScenarioId(newScenario.id);
-    lastSyncRef.current = Date.now();
   };
 
   const handleLoadScenario = (id: string) => {
@@ -155,13 +136,10 @@ const App: React.FC = () => {
 
   const handleDeleteScenario = async (id: string) => {
     if (window.confirm("Eliminare lo scenario?")) {
-      // Blocca sync tramite il servizio centralizzato
       db.blockSync(10000); 
-
       await db.deleteScenario(id);
       setScenarios(prev => prev.filter(s => s.id !== id));
       if (activeScenarioId === id) setActiveScenarioId(null);
-      lastSyncRef.current = Date.now();
     }
   };
 
@@ -171,7 +149,6 @@ const App: React.FC = () => {
     const updated = { ...scenario, name: newName };
     await db.saveScenario(updated);
     setScenarios(prev => prev.map(s => s.id === id ? updated : s));
-    lastSyncRef.current = Date.now();
   };
 
   const handleUpdateScenarioData = async (id: string) => {
@@ -180,74 +157,48 @@ const App: React.FC = () => {
     const updated = { ...scenario, data: JSON.parse(JSON.stringify(data)), date: new Date().toLocaleDateString('it-IT') + " (Agg.)" };
     await db.saveScenario(updated);
     setScenarios(prev => prev.map(s => s.id === id ? updated : s));
-    lastSyncRef.current = Date.now();
   };
 
   const handleImportScenarios = async (newScenarios: Scenario[]) => {
     for (const s of newScenarios) await db.saveScenario(s);
     setScenarios(prev => [...newScenarios, ...prev]);
-    lastSyncRef.current = Date.now();
   };
 
   const handleResetAll = async () => {
     if (window.confirm("Cancellare tutto?")) {
-      db.blockSync(10000); // Block sync during reset
+      db.blockSync(10000);
       await db.clearAll();
       window.location.reload();
     }
   };
 
-  if (!isLoaded) {
-    return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-slate-50 text-center px-6">
-        <div className="w-16 h-16 border-4 border-brand-100 border-t-brand-600 rounded-full animate-spin mb-6"></div>
-        <h2 className="text-xl font-bold text-slate-800">MM's PROPERTY</h2>
-        <p className="text-slate-400 font-medium animate-pulse mt-2">Allineamento database centrale...</p>
-      </div>
-    );
-  }
+  if (!isLoaded) return <div className="min-h-screen flex items-center justify-center bg-slate-50 font-bold">Caricamento...</div>;
 
   return (
     <div className="min-h-screen bg-[#f8fafc] flex">
-      <Sidebar 
-        activeTab={activeMainTab} 
-        onTabChange={setActiveMainTab} 
-        onReset={handleResetAll} 
-        onPrint={() => window.print()} 
-        isCollapsed={isSidebarCollapsed}
-        onToggle={() => setIsSidebarCollapsed(prev => !prev)}
-      />
-
+      <Sidebar activeTab={activeMainTab} onTabChange={setActiveMainTab} onReset={handleResetAll} onPrint={() => window.print()} isCollapsed={isSidebarCollapsed} onToggle={() => setIsSidebarCollapsed(prev => !prev)} />
       <main className={`flex-1 min-h-screen relative p-6 pb-24 lg:p-10 transition-all duration-300 ease-in-out ${isSidebarCollapsed ? 'lg:ml-20' : 'lg:ml-72'}`}>
-        <div className="hidden lg:flex justify-between items-center mb-8 no-print">
-           <div className="text-sm text-slate-400 font-medium">Dashboard / <span className="text-slate-900 font-bold">{activeMainTab}</span></div>
-           <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full border ${isSaving ? 'bg-amber-50 border-amber-200 text-amber-600' : 'bg-emerald-50 border-emerald-200 text-emerald-600'}`}>
-              <div className={`w-1.5 h-1.5 rounded-full ${isSaving ? 'bg-amber-500 animate-pulse' : 'bg-emerald-500'}`}></div>
-              <span className="text-[10px] font-bold uppercase tracking-wide">{isSaving ? 'Salvataggio Cloud...' : 'Database Sincronizzato'}</span>
-           </div>
-        </div>
-
         {activeMainTab === MainTab.DASHBOARD && <GlobalDashboard />}
         {activeMainTab === MainTab.PURCHASE && (
           <div className="space-y-8 animate-fade-in">
-             <div className="flex justify-start no-print mb-4">
+             <div className="flex justify-start mb-4 no-print">
                <div className="bg-white p-1 rounded-2xl border border-slate-200 shadow-sm inline-flex gap-1">
-                  <button onClick={() => setActivePurchaseTab(PurchaseTab.INPUT)} className={`px-5 py-2.5 rounded-xl text-xs font-bold transition-all ${activePurchaseTab === PurchaseTab.INPUT ? 'bg-brand-50 text-brand-700 ring-1 ring-brand-200' : 'text-slate-500 hover:bg-slate-50'}`}>Editor Dati</button>
-                  <button onClick={() => setActivePurchaseTab(PurchaseTab.DASHBOARD)} className={`px-5 py-2.5 rounded-xl text-xs font-bold transition-all ${activePurchaseTab === PurchaseTab.DASHBOARD ? 'bg-brand-50 text-brand-700 ring-1 ring-brand-200' : 'text-slate-500 hover:bg-slate-50'}`}>Report</button>
+                  <button onClick={() => setActivePurchaseTab(PurchaseTab.INPUT)} className={`px-5 py-2.5 rounded-xl text-xs font-bold ${activePurchaseTab === PurchaseTab.INPUT ? 'bg-brand-50 text-brand-700 ring-1 ring-brand-200' : 'text-slate-500'}`}>Editor Dati</button>
+                  <button onClick={() => setActivePurchaseTab(PurchaseTab.DASHBOARD)} className={`px-5 py-2.5 rounded-xl text-xs font-bold ${activePurchaseTab === PurchaseTab.DASHBOARD ? 'bg-brand-50 text-brand-700 ring-1 ring-brand-200' : 'text-slate-500'}`}>Report</button>
                </div>
             </div>
             {activePurchaseTab === PurchaseTab.INPUT ? (
               <FinancialInput data={data} onChange={setData} scenarios={scenarios} activeScenarioId={activeScenarioId} onSaveScenario={handleSaveScenario} onLoadScenario={handleLoadScenario} onDeleteScenario={handleDeleteScenario} onUpdateScenario={handleUpdateScenario} onUpdateScenarioData={handleUpdateScenarioData} onImportScenarios={handleImportScenarios} />
-            ) : <Dashboard data={data} />}
+            ) : <Dashboard data={data} onChange={setData} />}
           </div>
         )}
         {activeMainTab === MainTab.PROPERTY_MGMT && (
           <div className="space-y-8 animate-fade-in">
-             <div className="flex justify-start no-print mb-4">
+             <div className="flex justify-start mb-4 no-print">
                <div className="bg-white p-1 rounded-2xl border border-slate-200 shadow-sm inline-flex gap-1">
-                  <button onClick={() => setActivePropertyTab(PropertyTab.ASSETS)} className={`px-5 py-2.5 rounded-xl text-xs font-bold transition-all ${activePropertyTab === PropertyTab.ASSETS ? 'bg-brand-50 text-brand-700 ring-1 ring-brand-200' : 'text-slate-500 hover:bg-slate-50'}`}>Patrimonio</button>
-                  <button onClick={() => setActivePropertyTab(PropertyTab.RENTALS)} className={`px-5 py-2.5 rounded-xl text-xs font-bold transition-all ${activePropertyTab === PropertyTab.RENTALS ? 'bg-brand-50 text-brand-700 ring-1 ring-brand-200' : 'text-slate-500 hover:bg-slate-50'}`}>Affitti</button>
-                  <button onClick={() => setActivePropertyTab(PropertyTab.CONTACTS)} className={`px-5 py-2.5 rounded-xl text-xs font-bold transition-all ${activePropertyTab === PropertyTab.CONTACTS ? 'bg-brand-50 text-brand-700 ring-1 ring-brand-200' : 'text-slate-500 hover:bg-slate-50'}`}>Anagrafica</button>
+                  <button onClick={() => setActivePropertyTab(PropertyTab.ASSETS)} className={`px-5 py-2.5 rounded-xl text-xs font-bold ${activePropertyTab === PropertyTab.ASSETS ? 'bg-brand-50 text-brand-700 ring-1 ring-brand-200' : 'text-slate-500'}`}>Patrimonio</button>
+                  <button onClick={() => setActivePropertyTab(PropertyTab.RENTALS)} className={`px-5 py-2.5 rounded-xl text-xs font-bold ${activePropertyTab === PropertyTab.RENTALS ? 'bg-brand-50 text-brand-700 ring-1 ring-brand-200' : 'text-slate-500'}`}>Affitti</button>
+                  <button onClick={() => setActivePropertyTab(PropertyTab.CONTACTS)} className={`px-5 py-2.5 rounded-xl text-xs font-bold ${activePropertyTab === PropertyTab.CONTACTS ? 'bg-brand-50 text-brand-700 ring-1 ring-brand-200' : 'text-slate-500'}`}>Anagrafica</button>
                </div>
             </div>
             {activePropertyTab === PropertyTab.ASSETS ? <PropertyAssetManager /> : activePropertyTab === PropertyTab.RENTALS ? <RentalManager /> : <ContactManager />}
