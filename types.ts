@@ -5,33 +5,12 @@ export interface Attachment {
   type: string;
 }
 
-export interface Portfolio {
-  id: string;
-  name: string;
-  owner: 'Giuseppe' | 'Claudia';
-  initialBalance: number;
-}
-
-export interface CostAssignment {
-  portfolioId: string;
-  amount: number;
-  date: string;
-}
-
-export interface PaymentRecord {
-  id: string;
-  amount: number;
-  date: string;
-}
-
 export interface CostDetail {
   amount: number;
+  paidAmount?: number; // Nuovo campo per pagamenti parziali
   isPaid: boolean;
-  assignments: CostAssignment[];
+  paymentDate: string;
   attachment?: Attachment;
-  paidAmount?: number;
-  paymentDate?: string;
-  payments?: PaymentRecord[];
 }
 
 export interface RenovationItem {
@@ -39,30 +18,27 @@ export interface RenovationItem {
   description: string;
   amount: number;
   isPaid: boolean;
-  assignments: CostAssignment[];
+  paymentDate: string;
   attachment?: Attachment;
-  paymentDate?: string;
-  payments?: PaymentRecord[];
 }
 
 export interface CustomSensor {
-  id: string;
-  entity_id_suffix: string;
+  id: string; // generated uuid
+  entity_id_suffix: string; // e.g. "cashflow_viaroma" -> sensor.immoplan_cashflow_viaroma
   name: string;
-  type: 'PROPERTY_CASHFLOW' | 'PROPERTY_VALUE' | 'CATEGORY_TOTAL' | 'CALENDAR_EVENTS';
-  targetId?: string; // 'GLOBAL' for global calendar
+  type: 'PROPERTY_CASHFLOW' | 'PROPERTY_VALUE' | 'CATEGORY_TOTAL';
+  targetId?: string; // Property ID or Category ID
 }
 
 export interface FinancialData {
   propertyName: string;
   totalPrice: number;
-  propertyPayments?: RenovationItem[];
-  portfolios: Portfolio[]; 
+  propertyPayments?: RenovationItem[]; // Nuovo: Lista acconti/tranche prezzo immobile
   totalBudget: number;
+  liquidityGiuseppe: number;
+  liquidityClaudia: number;
   loanPercentage: number;
   purchaseCosts: {
-    deposit: CostDetail;
-    balance: CostDetail; // Nuovo campo: Saldo al Rogito (Cash)
     notary: CostDetail;
     agency: CostDetail;
     taxes: CostDetail;
@@ -73,10 +49,10 @@ export interface FinancialData {
     worksBreakdown: RenovationItem[];
     materials: number;
     materialsBreakdown: RenovationItem[];
-    design: CostDetail;
+    design: CostDetail | number;
     contingency: number;
   };
-  customSensors?: CustomSensor[];
+  customSensors?: CustomSensor[]; // New field for custom sensors configuration
 }
 
 export interface Scenario {
@@ -137,6 +113,30 @@ export interface Landlord {
   createdAt: string;
 }
 
+export interface RentalData {
+  propertyValue: number;
+  monthlyRent: number;
+  mortgage: number;
+  condo: number;
+  utilities: number;
+  internet: number;
+  maintenance: number;
+  taxes: number;
+  taxRate: number;
+}
+
+export interface RecurringCost {
+  id: string;
+  name: string;
+  category: 'MORTGAGE' | 'TAX' | 'MAINTENANCE' | 'UTILITY' | 'INSURANCE' | 'INTERNET' | 'OTHER';
+  amount: number;
+  frequency: 'MONTHLY' | 'YEARLY' | 'ONE_OFF';
+  date?: string;
+  referenceMonth?: number;
+  referenceYear?: number;
+  haEntityId?: string; 
+}
+
 export interface Property {
   id: string;
   name: string;
@@ -150,29 +150,17 @@ export interface Property {
   coordinates?: { lat: number; lng: number; };
   financials?: {
     mortgageAmount: number;
-    mortgageDuration?: number;
+    mortgageDuration?: number; // Anni
     mortgageStartDate?: string;
-    mortgageRate?: number;
-    monthlyRent?: number;
+    mortgageRate?: number; // Percentuale interesse
+    monthlyRent?: number; // Canone attuale o stimato
     condoFees: number;
     defaultTaxRate: number;
-    targetMargin?: number;
+    targetMargin?: number; // Margine percentuale desiderato
   };
   recurringCosts?: RecurringCost[];
   currentTenantId?: string; 
   documents?: Attachment[];
-}
-
-export interface RecurringCost {
-  id: string;
-  name: string;
-  category: 'MORTGAGE' | 'TAX' | 'MAINTENANCE' | 'UTILITY' | 'INSURANCE' | 'INTERNET' | 'OTHER';
-  amount: number;
-  frequency: 'MONTHLY' | 'YEARLY' | 'ONE_OFF';
-  date?: string;
-  referenceMonth?: number;
-  referenceYear?: number;
-  haEntityId?: string; 
 }
 
 export enum MainTab {

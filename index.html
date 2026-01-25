@@ -1,62 +1,144 @@
+
 <!DOCTYPE html>
 <html lang="it">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>MM's PROPERTY - Real Estate Management</title>
-    
-    <!-- Configurazione Runtime dinamica: Caricata come script statico dal server locale -->
+    <!-- Caricamento Configurazione Runtime (Percorso relativo senza slash iniziale) -->
     <script src="env-config.js"></script>
     
-    <!-- Google Fonts (Ammessi generalmente, ma caricati via link standard) -->
+    <!-- Google Fonts: Inter -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
     
     <!-- Leaflet CSS -->
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+     integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+     crossorigin=""/>
      
-    <!-- Tailwind CSS (Vite lo ottimizzerà localmente durante la build) -->
     <script src="https://cdn.tailwindcss.com"></script>
-    
     <script>
-      // Sincronizzazione tema sicura
+      // Sincronizzazione tema con impostazioni Add-on
       const isDarkMode = window.appConfig?.darkMode || false;
-      if (isDarkMode) { document.documentElement.classList.add('dark'); }
+      if (isDarkMode) {
+        document.documentElement.classList.add('dark');
+      }
 
       tailwind.config = {
         darkMode: 'class',
         theme: {
           extend: {
-            fontFamily: { sans: ['Inter', 'sans-serif'] },
+            fontFamily: {
+              sans: ['Inter', 'sans-serif'],
+            },
             colors: {
               brand: {
-                50: '#f0f7ff', 100: '#e0f0fe', 200: '#bae2fd', 300: '#7ccbfd',
-                400: '#36b2fa', 500: '#0ea5e9', 600: '#0284c7', 700: '#0369a1',
-                800: '#075985', 900: '#0c4a6e', 950: '#082f49',
+                50: '#f0f7ff',
+                100: '#e0f0fe',
+                200: '#bae2fd',
+                300: '#7ccbfd',
+                400: '#36b2fa',
+                500: '#0ea5e9',
+                600: '#0284c7',
+                700: '#0369a1',
+                800: '#075985',
+                900: '#0c4a6e',
+                950: '#082f49',
               }
+            },
+            boxShadow: {
+              'soft': '0 10px 40px -10px rgba(0, 0, 0, 0.05)',
+              'glow': '0 0 20px rgba(14, 165, 233, 0.4)',
+              'glass': '0 8px 32px 0 rgba(31, 38, 135, 0.07)',
             }
           }
         }
       }
     </script>
     <style>
-      @media print { .no-print { display: none !important; } }
-      body.dark { background-color: #0f172a; color: #f8fafc; }
-      ::-webkit-scrollbar { width: 6px; height: 6px; }
-      ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
-      .leaflet-container { z-index: 0; border-radius: 1.5rem; }
+      @media print {
+        .no-print { display: none !important; }
+        .print-only { display: block !important; }
+        body { background: white; }
+      }
+      body.dark {
+        background-color: #0f172a;
+        color: #f8fafc;
+      }
+      .dark .bg-white {
+        background-color: #1e293b !important;
+        border-color: #334155 !important;
+      }
+      .dark .text-slate-900 { color: #f8fafc !important; }
+      .dark .text-slate-800 { color: #f1f5f9 !important; }
+      .dark .text-slate-600 { color: #cbd5e1 !important; }
+      .dark .bg-slate-50 { background-color: #0f172a !important; }
+      .dark .border-slate-100, .dark .border-slate-200 { border-color: #334155 !important; }
+
+      .offscreen-render {
+        position: absolute;
+        left: -9999px;
+        top: 0;
+        width: 100%;
+        height: 0;
+        overflow: hidden;
+        visibility: hidden;
+      }
+      @media print {
+        .offscreen-render {
+          position: static;
+          left: auto;
+          top: auto;
+          width: auto;
+          height: auto;
+          overflow: visible;
+          visibility: visible;
+          display: block;
+        }
+      }
+      ::-webkit-scrollbar {
+        width: 6px;
+        height: 6px;
+      }
+      ::-webkit-scrollbar-track {
+        background: transparent; 
+      }
+      ::-webkit-scrollbar-thumb {
+        background: #cbd5e1; 
+        border-radius: 10px;
+      }
+      ::-webkit-scrollbar-thumb:hover {
+        background: #94a3b8; 
+      }
+      .glass-panel {
+        background: rgba(255, 255, 255, 0.7);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        border: 1px solid rgba(255, 255, 255, 0.5);
+      }
+      .dark .glass-panel {
+        background: rgba(30, 41, 59, 0.7);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+      }
+      .leaflet-container {
+        z-index: 0;
+        border-radius: 1.5rem;
+      }
     </style>
     <!-- Leaflet JS -->
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script type="importmap">
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+     integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+     crossorigin=""></script>
+<script type="importmap">
 {
   "imports": {
-    "react": "https://esm.sh/react@^19.2.3",
-    "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
-    "@google/genai": "https://esm.sh/@google/genai@^1.37.0",
     "recharts": "https://esm.sh/recharts@^3.6.0",
     "react/": "https://esm.sh/react@^19.2.3/",
+    "react": "https://esm.sh/react@^19.2.3",
+    "@google/genai": "https://esm.sh/@google/genai@^1.35.0",
+    "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
     "vite": "https://esm.sh/vite@^7.3.1",
     "@vitejs/plugin-react": "https://esm.sh/@vitejs/plugin-react@^5.1.2"
   }
@@ -64,10 +146,10 @@
 </script>
 <link rel="stylesheet" href="/index.css">
 </head>
-  <body class="bg-[#f8fafc] text-slate-800 font-sans antialiased transition-colors duration-300">
+  <body class="bg-[#f8fafc] text-slate-800 font-sans antialiased selection:bg-brand-100 selection:text-brand-900 transition-colors duration-300">
     <div id="root"></div>
-    <!-- Vite userà index.tsx come entry point e risolverà le importazioni di @google/genai, React e Recharts dai node_modules locali -->
-    <script type="module" src="index.tsx"></script>
+    <!-- Entry point for Vite (percorso relativo) -->
+    <script type="module" src="./index.tsx"></script>
   <script type="module" src="/index.tsx"></script>
 </body>
 </html>

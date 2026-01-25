@@ -1,0 +1,528 @@
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { FinancialInput } from './components/FinancialInput';
+import { Dashboard } from './components/Dashboard';
+import { AIAdvisor } from './components/AIAdvisor';
+import { RenovationVisualizer } from './components/RenovationVisualizer';
+import { RentalManager } from './components/RentalManager';
+import { PropertyAssetManager } from './components/PropertyAssetManager';
+import { ContactManager } from './components/ContactManager';
+import { GlobalDashboard } from './components/GlobalDashboard';
+import { AdminPanel } from './components/AdminPanel';
+import { Sidebar } from './components/Sidebar';
+import { LogsDebugPanel } from './components/LogsDebugPanel';
+import { FinancialData, MainTab, PurchaseTab, PropertyTab, Scenario, SystemLog } from './types';
+import { db } from './services/dbService';
+import { initFrontendLogger } from './services/logger';
+
+const INITIAL_DATA: FinancialData = {
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+**Integrazione**: App.tsx, DBService, tutti i componenti**Status**: ✅ Implementato**Data**: 2026-01-18**Versione**: 1.0.0---A: Il sistema tiene massimo 1000 log. Cancella via "Clear" nel panel.**Q: I log occupano troppo spazio?**A: Sì! `logger.info('msg', 'context', { userId: 123, action: 'save' })`**Q: Posso loggare metadata personalizzato?**A: Apri Debug Panel → clicca "Export JSON" o "Export CSV"**Q: Come esportare log per debugging offline?**A: Assicurati che `initFrontendLogger()` sia stato chiamato in App.tsx**Q: I log non appaiono nel Debug Panel?**### 📞 Troubleshooting   - Heatmaps di errori   - Performance metrics   - Tracking eventi utente2. **Analytics** (Future)   - Error boundaries per componenti   - Logger di errori dettagliati   - Wrappare dbService.ts con try-catch1. **Error Handling nei Servizi** (P0.2)### 🚀 Prossimi Passi (P0)```};  }, []);    };      logger.debug('Componente smontato', 'MyComponent');    return () => {        logger.info('Componente montato', 'MyComponent');        if (!logger) return;    const logger = frontendLogger;  useEffect(() => {const MyComponent = () => {```tsx**Ogni componente può loggare:**### 🔗 Integrazione con Componenti```// Output: "✓ Operazione complessa" { duration: 1234 });  'MyModule'  },    // codice  async () => {  'Operazione complessa',const result = await logger.trackAsync(// Automatico con trackAsync```tsxTraccia automaticamente durata delle operazioni:### 📊 Performance Tracking- Non-blocking (promise-based)- POST a `/api/log` per persistenza remota- Console output su stdout**Backend:** Console + Remote Logging- Export completo su CSV- Ricerca su memoria (veloce)- Ultimi 1000 log in memoria**Frontend:** IndexedDB store `systemLogs`### 💾 Persistenza```});  level: ['info', 'success']  messageContains: 'sync',const syncLogs = logger.searchLogs({// Ricerca testuale});  limit: 50  context: 'DBService',const dbLogs = logger.searchLogs({// Cercare log da un modulo specifico});  limit: 100  fromTime: Date.now() - (30 * 60 * 1000),  level: ['error', 'warn'],const recentErrors = logger.searchLogs({// Cercare errori negli ultimi 30 minuti```tsx### 🔍 Ricerca Avanzata| `success` | Operazioni riuscite | Verde || `error` | Errori bloccanti | Rosso || `warn` | Avvisi non critici | Arancione || `info` | Informazioni generali | Blu || `debug` | Debug info | Grigio scuro || `trace` | Dettagli molto fini | Grigio ||---------|-----|--------|| Livello | Uso | Colore |### 📈 Livelli di Log- Metadata personalizzato- Contesto di generazione- Timestamp e durata- Breakdown per tipo (Errors, Warns, Success)- Total Logs (numero totale)**Informazioni Mostrate:**5. Esporta in JSON/CSV per analisi offline4. Clicca su "Metadata" per expandere dettagli3. Usa i filtri per cercare log specifici2. Si apre un panel dal basso1. Nel header della UI, clicca sul bottone 🔍 Logs**Come accedere:**### 🎨 Debug Panel```}  metadata?: Record<string, any>; // Dati aggiuntivi  duration?: number; // Per operazioni asincrone  context?: string; // Modulo (es. "FinancialInput", "DB")  timestamp: number; // Millisecondo per sorting  time: string;  type: 'error' | 'success' | 'info'; // Tipo visuale  message: string;  id: number;interface LogEntry {```typescript### 📊 Struttura LogEntry```});  // operazioneawait logger.trackAsync('DB Sync', async () => {// Tracking asynclogger.error('Database connection failed', { code: 'ECONNREFUSED' });logger.warn('API rate limit', { retries: 3 });logger.info('Server avviato');const logger = getBackendLogger('API');const { getBackendLogger } = require('./services/logger');```javascript**Backend:**```// { totalLogs: 234, byLevel: { error: 5, warn: 12, ... }, byContext: { ... } }const stats = logger.getStats();// Stats});  limit: 50  fromTime: Date.now() - 3600000, // Ultimi 60 min  level: ['error', 'warn'],const errors = logger.searchLogs({// Ricerca);  'DataService'  () => fetchData(),  'Caricamento dati',const data = await logger.trackAsync(// Tracking operazioni asincronelogger.success('Sincronizzazione completata', 'Sync');logger.error('Errore DB', 'Scenarios', { errorCode: 500 });logger.info('Utente ha salvato scenario', 'FinancialInput');// Logging sempliceconst logger = await initFrontendLogger();// Inizializzazione (una volta)import { initFrontendLogger } from './services/logger';```tsx**Frontend:**### 🛠️ Utilizzo nel Codice- Log di sistema all'avvio- LogsDebugPanel integrato- Bottone 🔍 Logs nel header- Import e inizializzazione FrontendLogger#### 3. **Aggiornamenti `App.tsx`**- Metadata expandibile- Timestamp e durata operazioni- Export JSON/CSV- Stats (totale log, errori, warnings)- Ricerca testuale- Filtri per livello- Panel a schermo intero (70vh)Pannello debug visivo per visualizzare log in tempo reale#### 2. **File `components/LogsDebugPanel.tsx`** (NUOVO)- Non-blocking (async)- Stesso sistema di livelli- Remote logging (POST su `/api/log`)- Output su console con colori**BackendLogger** (Per Node.js)- Tracking performance (durata operazioni)- Livelli: trace, debug, info, warn, error, success- Real-time event listeners- Export in JSON e CSV- Ricerca avanzata con filtri- Massimo 1000 log in memoria (FIFO)- Persiste i log in IndexedDB**FrontendLogger** (Per React)Sistema completo di logging con due classi:#### 1. **File `services/logger.ts`** (NUOVO)### 📋 Cosa è stato fattoSistema di logging robusto, centralizzato e persistente per frontend e backend.## Implementazione P1.4import { FinancialInput } from './components/FinancialInput';
+import { Dashboard } from './components/Dashboard';
+import { AIAdvisor } from './components/AIAdvisor';
+import { RenovationVisualizer } from './components/RenovationVisualizer';
+import { RentalManager } from './components/RentalManager';
+import { PropertyAssetManager } from './components/PropertyAssetManager';
+import { ContactManager } from './components/ContactManager';
+import { GlobalDashboard } from './components/GlobalDashboard';
+import { AdminPanel } from './components/AdminPanel';
+import { Sidebar } from './components/Sidebar';
+import { LogsDebugPanel } from './components/LogsDebugPanel';
+import { FinancialData, MainTab, PurchaseTab, PropertyTab, Scenario, SystemLog } from './types';
+import { db } from './services/dbService';
+import { initFrontendLogger } from './services/logger';
+
+const INITIAL_DATA: FinancialData = {
+  propertyName: 'Nuovo Progetto',
+  totalPrice: 200000,
+  propertyPayments: [], // Inizializzazione array pagamenti prezzo
+  totalBudget: 280000,
+  liquidityGiuseppe: 45000,
+  liquidityClaudia: 45000,
+  loanPercentage: 80,
+  purchaseCosts: {
+    notary: { amount: 3000, isPaid: false, paymentDate: new Date().toISOString().split('T')[0] },
+    agency: { amount: 6000, isPaid: false, paymentDate: new Date().toISOString().split('T')[0] },
+    taxes: { amount: 2000, isPaid: false, paymentDate: new Date().toISOString().split('T')[0] },
+    other: { amount: 0, isPaid: false, paymentDate: new Date().toISOString().split('T')[0] },
+  },
+  renovationCosts: {
+    works: 30000,
+    worksBreakdown: [{ id: '1', description: 'Stima lavori edili', amount: 30000, isPaid: false, paymentDate: new Date().toISOString().split('T')[0] }],
+    materials: 10000,
+    materialsBreakdown: [{ id: '1', description: 'Fornitura pavimenti e rivestimenti', amount: 10000, isPaid: false, paymentDate: new Date().toISOString().split('T')[0] }],
+    design: { amount: 2000, isPaid: false, paymentDate: new Date().toISOString().split('T')[0] },
+    contingency: 5000,
+  },
+  customSensors: [] 
+};
+
+const App: React.FC = () => {
+  const [data, setData] = useState<FinancialData>(INITIAL_DATA);
+  const [scenarios, setScenarios] = useState<Scenario[]>([]);
+  const [activeScenarioId, setActiveScenarioId] = useState<string | null>(null);
+  const [activeMainTab, setActiveMainTab] = useState<MainTab>(MainTab.DASHBOARD);
+  const [activePurchaseTab, setActivePurchaseTab] = useState<PurchaseTab>(PurchaseTab.INPUT);
+  const [activePropertyTab, setActivePropertyTab] = useState<PropertyTab>(PropertyTab.ASSETS);
+  const [isLoaded, setIsLoaded] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [logs, setLogs] = useState<SystemLog[]>([]);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const [isLogsDebugOpen, setIsLogsDebugOpen] = useState(false);
+  const lastSyncRef = useRef<number>(0);
+
+  const addLog = useCallback((message: string, type: 'info' | 'error' | 'success') => {
+    const newLog: SystemLog = { id: Date.now() + Math.random(), message, type, time: new Date().toLocaleTimeString() };
+    setLogs(prev => [newLog, ...prev].slice(0, 50));
+    db.saveLog(newLog).catch(() => {});
+  }, []);
+
+  const refreshUIFromDB = useCallback(async () => {
+    const [savedData, savedScenarios, savedLogs] = await Promise.all([
+      db.getAppData(),
+      db.getScenarios(),
+      db.getLogs()
+    ]);
+    if (savedData) setData(savedData);
+    if (savedScenarios) setScenarios(savedScenarios);
+    if (savedLogs) setLogs(savedLogs);
+  }, []);
+
+  const syncNow = useCallback(async () => {
+    // Controllo blocco centralizzato DBService
+    if (db.isSyncBlocked()) return;
+    
+    // Debounce locale
+    if (Date.now() - lastSyncRef.current < 5000) return;
+
+    const changed = await db.pullFromServer();
+    if (changed) {
+      await refreshUIFromDB();
+      addLog("Sincronizzazione completata", 'success');
+    }
+    lastSyncRef.current = Date.now();
+  }, [refreshUIFromDB, addLog]);
+
+  // Inizializzazione e Eventi di Sistema
+  useEffect(() => {
+    db.onLog = addLog;
+    const initData = async () => {
+      try {
+        // Inizializza il logger strutturato
+        const logger = await initFrontendLogger();
+        logger.info('Applicazione avviata', 'App');
+        
+        await db.init();
+        await refreshUIFromDB();
+        logger.success('Database inizializzato', 'App');
+      } catch (e) {
+        addLog("Errore connessione database", 'error');
+      } finally {
+        setIsLoaded(true);
+      }
+    };
+    initData();
+
+    // Sincronizza quando l'app torna visibile (es. riaprendo il tab o sbloccando il telefono)
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        syncNow();
+      }
+    };
+
+    window.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('focus', syncNow);
+
+    const pollInterval = setInterval(async () => {
+      const now = Date.now();
+      if (now - lastSyncRef.current > 30000) { // Polling ogni 30s se idle
+        syncNow();
+      }
+    }, 30000);
+
+    return () => {
+      window.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('focus', syncNow);
+      clearInterval(pollInterval);
+    };
+  }, [addLog, refreshUIFromDB, syncNow]);
+
+  useEffect(() => {
+    if (isLoaded) {
+      setIsSaving(true);
+      const timer = setTimeout(async () => {
+        try {
+          await db.saveAppData(data);
+          lastSyncRef.current = Date.now();
+        } finally {
+          setIsSaving(false);
+        }
+      }, 1000); 
+      return () => clearTimeout(timer);
+    }
+  }, [data, isLoaded]);
+
+  const handleSaveScenario = async (name: string) => {
+    const newScenario: Scenario = { id: Date.now().toString(), name, date: new Date().toLocaleDateString('it-IT'), data: JSON.parse(JSON.stringify(data)) };
+    await db.saveScenario(newScenario);
+    setScenarios(prev => [newScenario, ...prev]);
+    setActiveScenarioId(newScenario.id);
+    lastSyncRef.current = Date.now();
+  };
+
+  const handleLoadScenario = (id: string) => {
+    const scenario = scenarios.find(s => s.id === id);
+    if (scenario) {
+      setData(JSON.parse(JSON.stringify(scenario.data)));
+      setActiveScenarioId(id);
+    }
+  };
+
+  const handleDeleteScenario = async (id: string) => {
+    if (window.confirm("Eliminare lo scenario?")) {
+      // Blocca sync tramite il servizio centralizzato
+      db.blockSync(10000); 
+
+      await db.deleteScenario(id);
+      setScenarios(prev => prev.filter(s => s.id !== id));
+      if (activeScenarioId === id) setActiveScenarioId(null);
+      lastSyncRef.current = Date.now();
+    }
+  };
+
+  const handleUpdateScenario = async (id: string, newName: string) => {
+    const scenario = scenarios.find(s => s.id === id);
+    if (!scenario) return;
+    const updated = { ...scenario, name: newName };
+    await db.saveScenario(updated);
+    setScenarios(prev => prev.map(s => s.id === id ? updated : s));
+    lastSyncRef.current = Date.now();
+  };
+
+  const handleUpdateScenarioData = async (id: string) => {
+    const scenario = scenarios.find(s => s.id === id);
+    if (!scenario) return;
+    const updated = { ...scenario, data: JSON.parse(JSON.stringify(data)), date: new Date().toLocaleDateString('it-IT') + " (Agg.)" };
+    await db.saveScenario(updated);
+    setScenarios(prev => prev.map(s => s.id === id ? updated : s));
+    lastSyncRef.current = Date.now();
+  };
+
+  const handleImportScenarios = async (newScenarios: Scenario[]) => {
+    for (const s of newScenarios) await db.saveScenario(s);
+    setScenarios(prev => [...newScenarios, ...prev]);
+    lastSyncRef.current = Date.now();
+  };
+
+  const handleResetAll = async () => {
+    if (window.confirm("Cancellare tutto?")) {
+      db.blockSync(10000); // Block sync during reset
+      await db.clearAll();
+      window.location.reload();
+    }
+  };
+
+  if (!isLoaded) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center bg-slate-50 text-center px-6">
+        <div className="w-16 h-16 border-4 border-brand-100 border-t-brand-600 rounded-full animate-spin mb-6"></div>
+        <h2 className="text-xl font-bold text-slate-800">MM's PROPERTY</h2>
+        <p className="text-slate-400 font-medium animate-pulse mt-2">Allineamento database centrale...</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-[#f8fafc] flex">
+      <Sidebar 
+        activeTab={activeMainTab} 
+        onTabChange={setActiveMainTab} 
+        onReset={handleResetAll} 
+        onPrint={() => window.print()} 
+        isCollapsed={isSidebarCollapsed}
+        onToggle={() => setIsSidebarCollapsed(prev => !prev)}
+      />
+
+      <main className={`flex-1 min-h-screen relative p-6 pb-24 lg:p-10 transition-all duration-300 ease-in-out ${isSidebarCollapsed ? 'lg:ml-20' : 'lg:ml-72'}`}>
+        <div className="hidden lg:flex justify-between items-center mb-8 no-print">
+           <div className="text-sm text-slate-400 font-medium">Dashboard / <span className="text-slate-900 font-bold">{activeMainTab}</span></div>
+           <div className="flex items-center gap-3">
+             <button
+               onClick={() => setIsLogsDebugOpen(true)}
+               className="px-3 py-1.5 rounded-lg text-xs font-bold text-slate-600 hover:bg-slate-100 transition-colors"
+               title="Apri Debug Panel"
+             >
+               🔍 Logs
+             </button>
+             <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full border ${isSaving ? 'bg-amber-50 border-amber-200 text-amber-600' : 'bg-emerald-50 border-emerald-200 text-emerald-600'}`}>
+                <div className={`w-1.5 h-1.5 rounded-full ${isSaving ? 'bg-amber-500 animate-pulse' : 'bg-emerald-500'}`}></div>
+                <span className="text-[10px] font-bold uppercase tracking-wide">{isSaving ? 'Salvataggio Cloud...' : 'Database Sincronizzato'}</span>
+             </div>
+           </div>
+        </div>
+
+        {activeMainTab === MainTab.DASHBOARD && <GlobalDashboard />}
+        {activeMainTab === MainTab.PURCHASE && (
+          <div className="space-y-8 animate-fade-in">
+             <div className="flex justify-start no-print mb-4">
+               <div className="bg-white p-1 rounded-2xl border border-slate-200 shadow-sm inline-flex gap-1">
+                  <button onClick={() => setActivePurchaseTab(PurchaseTab.INPUT)} className={`px-5 py-2.5 rounded-xl text-xs font-bold transition-all ${activePurchaseTab === PurchaseTab.INPUT ? 'bg-brand-50 text-brand-700 ring-1 ring-brand-200' : 'text-slate-500 hover:bg-slate-50'}`}>Editor Dati</button>
+                  <button onClick={() => setActivePurchaseTab(PurchaseTab.DASHBOARD)} className={`px-5 py-2.5 rounded-xl text-xs font-bold transition-all ${activePurchaseTab === PurchaseTab.DASHBOARD ? 'bg-brand-50 text-brand-700 ring-1 ring-brand-200' : 'text-slate-500 hover:bg-slate-50'}`}>Report</button>
+               </div>
+            </div>
+            {activePurchaseTab === PurchaseTab.INPUT ? (
+              <FinancialInput data={data} onChange={setData} scenarios={scenarios} activeScenarioId={activeScenarioId} onSaveScenario={handleSaveScenario} onLoadScenario={handleLoadScenario} onDeleteScenario={handleDeleteScenario} onUpdateScenario={handleUpdateScenario} onUpdateScenarioData={handleUpdateScenarioData} onImportScenarios={handleImportScenarios} />
+            ) : <Dashboard data={data} />}
+          </div>
+        )}
+        {activeMainTab === MainTab.PROPERTY_MGMT && (
+          <div className="space-y-8 animate-fade-in">
+             <div className="flex justify-start no-print mb-4">
+               <div className="bg-white p-1 rounded-2xl border border-slate-200 shadow-sm inline-flex gap-1">
+                  <button onClick={() => setActivePropertyTab(PropertyTab.ASSETS)} className={`px-5 py-2.5 rounded-xl text-xs font-bold transition-all ${activePropertyTab === PropertyTab.ASSETS ? 'bg-brand-50 text-brand-700 ring-1 ring-brand-200' : 'text-slate-500 hover:bg-slate-50'}`}>Patrimonio</button>
+                  <button onClick={() => setActivePropertyTab(PropertyTab.RENTALS)} className={`px-5 py-2.5 rounded-xl text-xs font-bold transition-all ${activePropertyTab === PropertyTab.RENTALS ? 'bg-brand-50 text-brand-700 ring-1 ring-brand-200' : 'text-slate-500 hover:bg-slate-50'}`}>Affitti</button>
+                  <button onClick={() => setActivePropertyTab(PropertyTab.CONTACTS)} className={`px-5 py-2.5 rounded-xl text-xs font-bold transition-all ${activePropertyTab === PropertyTab.CONTACTS ? 'bg-brand-50 text-brand-700 ring-1 ring-brand-200' : 'text-slate-500 hover:bg-slate-50'}`}>Anagrafica</button>
+               </div>
+            </div>
+            {activePropertyTab === PropertyTab.ASSETS ? <PropertyAssetManager /> : activePropertyTab === PropertyTab.RENTALS ? <RentalManager /> : <ContactManager />}
+          </div>
+        )}
+        {activeMainTab === MainTab.ADVISOR && <AIAdvisor data={data} />}
+        {activeMainTab === MainTab.VISUALIZER && <RenovationVisualizer />}
+        {activeMainTab === MainTab.ADMIN && <AdminPanel logs={logs} onResetDatabase={handleResetAll} />}
+      </main>
+
+      <LogsDebugPanel isOpen={isLogsDebugOpen} onClose={() => setIsLogsDebugOpen(false)} />
+    </div>
+  );
+};
+
+export default App;
