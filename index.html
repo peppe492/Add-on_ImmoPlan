@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="it">
   <head>
@@ -5,10 +6,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>MM's PROPERTY - Real Estate Management</title>
     
-    <!-- Configurazione Runtime dinamica: Caricata come script statico dal server locale -->
+    <!-- Configurazione Runtime dinamica -->
     <script src="env-config.js"></script>
     
-    <!-- Google Fonts (Ammessi generalmente, ma caricati via link standard) -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
@@ -16,14 +16,10 @@
     <!-- Leaflet CSS -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
      
-    <!-- Tailwind CSS (Vite lo ottimizzerà localmente durante la build) -->
+    <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
     
     <script>
-      // Sincronizzazione tema sicura
-      const isDarkMode = window.appConfig?.darkMode || false;
-      if (isDarkMode) { document.documentElement.classList.add('dark'); }
-
       tailwind.config = {
         darkMode: 'class',
         theme: {
@@ -35,6 +31,11 @@
                 400: '#36b2fa', 500: '#0ea5e9', 600: '#0284c7', 700: '#0369a1',
                 800: '#075985', 900: '#0c4a6e', 950: '#082f49',
               }
+            },
+            boxShadow: {
+              'neon-cyan': '0 0 15px rgba(6, 182, 212, 0.4)',
+              'neon-purple': '0 0 15px rgba(168, 85, 247, 0.4)',
+              'neon-rose': '0 0 15px rgba(244, 63, 94, 0.4)',
             }
           }
         }
@@ -42,31 +43,75 @@
     </script>
     <style>
       @media print { .no-print { display: none !important; } }
-      body.dark { background-color: #0f172a; color: #f8fafc; }
+      
       ::-webkit-scrollbar { width: 6px; height: 6px; }
       ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
       .leaflet-container { z-index: 0; border-radius: 1.5rem; }
+
+      /* --- THEME: NEON --- */
+      .theme-neon {
+        background-color: #020617;
+        color: #f8fafc;
+      }
+      
+      .theme-neon ::-webkit-scrollbar-thumb { background: #334155; }
+      
+      .theme-neon .bg-white { background-color: #0f172a !important; border-color: #1e293b !important; color: #cbd5e1 !important; }
+      .theme-neon .text-slate-900 { color: #f8fafc !important; }
+      .theme-neon .text-slate-800 { color: #f1f5f9 !important; }
+      .theme-neon .text-slate-700 { color: #e2e8f0 !important; }
+      .theme-neon .text-slate-600 { color: #cbd5e1 !important; }
+      .theme-neon .bg-slate-50 { background-color: #020617 !important; }
+      .theme-neon .bg-slate-100 { background-color: #1e293b !important; }
+      .theme-neon .border-slate-100, .theme-neon .border-slate-200 { border-color: #1e293b !important; }
+      
+      /* Neon Accents */
+      .theme-neon .bg-brand-600 { background-color: #0891b2 !important; box-shadow: 0 0 15px rgba(8, 145, 178, 0.4); }
+      .theme-neon .text-brand-600 { color: #22d3ee !important; }
+      .theme-neon .shadow-soft { box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.3), 0 4px 6px -4px rgba(0, 0, 0, 0.2) !important; }
+      
+      /* Glowing Inputs */
+      .theme-neon input, .theme-neon select, .theme-neon textarea {
+        background-color: #0f172a !important;
+        border-color: #334155 !important;
+        color: #fff !important;
+      }
+      .theme-neon input:focus {
+        border-color: #06b6d4 !important;
+        box-shadow: 0 0 8px rgba(6, 182, 212, 0.3) !important;
+      }
+
+      /* Sidebar adjustments */
+      .theme-neon .lg\:flex-col.bg-white { background-color: #020617 !important; border-right: 1px solid #1e293b !important; }
+      
+      /* Card special neon borders */
+      .theme-neon .rounded-\[2\.5rem\].border-slate-100:hover {
+        border-color: #06b6d4 !important;
+        box-shadow: 0 0 20px rgba(6, 182, 212, 0.15) !important;
+      }
+
+      /* Transitions */
+      * { transition: background-color 0.4s ease, border-color 0.4s ease, box-shadow 0.4s ease; }
     </style>
     <!-- Leaflet JS -->
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script type="importmap">
-{
-  "imports": {
-    "react": "https://esm.sh/react@^19.2.3",
-    "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
-    "@google/genai": "https://esm.sh/@google/genai@^1.37.0",
-    "recharts": "https://esm.sh/recharts@^3.6.0",
-    "react/": "https://esm.sh/react@^19.2.3/",
-    "vite": "https://esm.sh/vite@^7.3.1",
-    "@vitejs/plugin-react": "https://esm.sh/@vitejs/plugin-react@^5.1.2"
-  }
-}
-</script>
+    <script type="importmap">
+    {
+      "imports": {
+        "react": "https://esm.sh/react@^19.2.3",
+        "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
+        "@google/genai": "https://esm.sh/@google/genai@^1.37.0",
+        "recharts": "https://esm.sh/recharts@^3.6.0",
+        "react/": "https://esm.sh/react@^19.2.3/",
+        "vite": "https://esm.sh/vite@^7.3.1",
+        "@vitejs/plugin-react": "https://esm.sh/@vitejs/plugin-react@^5.1.2"
+      }
+    }
+    </script>
 <link rel="stylesheet" href="/index.css">
 </head>
   <body class="bg-[#f8fafc] text-slate-800 font-sans antialiased transition-colors duration-300">
     <div id="root"></div>
-    <!-- Vite userà index.tsx come entry point e risolverà le importazioni di @google/genai, React e Recharts dai node_modules locali -->
     <script type="module" src="index.tsx"></script>
   <script type="module" src="/index.tsx"></script>
 </body>

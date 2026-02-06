@@ -41,6 +41,7 @@ export interface RenovationItem {
   isPaid: boolean;
   assignments: CostAssignment[];
   attachment?: Attachment;
+  paidAmount?: number;
   paymentDate?: string;
   payments?: PaymentRecord[];
 }
@@ -60,6 +61,7 @@ export interface FinancialData {
   portfolios: Portfolio[]; 
   totalBudget: number;
   loanPercentage: number;
+  theme?: 'DEFAULT' | 'NEON';
   purchaseCosts: {
     deposit: CostDetail;
     balance: CostDetail; // Nuovo campo: Saldo al Rogito (Cash)
