@@ -74,10 +74,7 @@ export const PropertyAssetManager: React.FC = () => {
     setProperties(uniqueProps);
     setRecords(loadedRecords || []);
     setTenants(loadedTenants || []);
-    if (selectedProp) {
-        const updated = uniqueProps.find(p => p.id === selectedProp.id);
-        if (updated) setSelectedProp(updated);
-    }
+    // Non sovrascriviamo selectedProp qui per evitare conflitti durante l'editing
   };
 
   const handleCreateProperty = async () => {
@@ -102,11 +99,11 @@ export const PropertyAssetManager: React.FC = () => {
     loadData();
   };
 
-  const handleUpdateProperty = async (updated: Property, showFeedback = false) => {
-    await db.saveProperty(updated);
-    setSelectedProp(updated);
+  // Funzione per salvare su DB (usata dal pulsante "Salva")
+  const savePropertyToDB = async (propToSave: Property) => {
+    await db.saveProperty(propToSave);
     await loadData();
-    if (showFeedback) alert("Modifiche salvate!");
+    alert("Modifiche salvate con successo!");
   };
   
   const handleDeleteProperty = async (id: string, e?: React.MouseEvent) => {
@@ -123,7 +120,12 @@ export const PropertyAssetManager: React.FC = () => {
     if (!selectedProp || !newCost.amount || !newCost.name) return;
     const cost: RecurringCost = { ...newCost as RecurringCost, id: `COST-${Date.now()}` };
     const updatedProp = { ...selectedProp, recurringCosts: [...(selectedProp.recurringCosts || []), cost] };
-    await handleUpdateProperty(updatedProp);
+    
+    // Aggiorniamo sia lo stato locale che il DB per i costi
+    setSelectedProp(updatedProp);
+    await db.saveProperty(updatedProp);
+    await loadData();
+
     setNewCost({ 
         category: 'OTHER', 
         frequency: 'MONTHLY', 
@@ -138,7 +140,9 @@ export const PropertyAssetManager: React.FC = () => {
   const handleDeleteCost = async (costId: string) => {
       if(!selectedProp) return;
       const updatedProp = { ...selectedProp, recurringCosts: (selectedProp.recurringCosts || []).filter(c => c.id !== costId) };
-      await handleUpdateProperty(updatedProp);
+      setSelectedProp(updatedProp);
+      await db.saveProperty(updatedProp);
+      await loadData();
   };
 
   const handleUploadDocument = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -149,17 +153,45 @@ export const PropertyAssetManager: React.FC = () => {
             const att = await readFile(file);
             if (customName) att.name = customName;
             const updatedDocs = [...(selectedProp.documents || []), att];
-            handleUpdateProperty({ ...selectedProp, documents: updatedDocs });
+            const updatedProp = { ...selectedProp, documents: updatedDocs };
+            setSelectedProp(updatedProp);
+            await db.saveProperty(updatedProp);
+            await loadData();
         }
     }
   };
 
-  const handleDeleteDocument = (index: number) => {
+  const handleDeleteDocument = async (index: number) => {
       if (selectedProp && selectedProp.documents && window.confirm("Rimuovere documento?")) {
           const updatedDocs = [...selectedProp.documents];
           updatedDocs.splice(index, 1);
-          handleUpdateProperty({ ...selectedProp, documents: updatedDocs });
+          const updatedProp = { ...selectedProp, documents: updatedDocs };
+          setSelectedProp(updatedProp);
+          await db.saveProperty(updatedProp);
+          await loadData();
       }
+  };
+
+  // Helper per il calcolo avanzato progresso mutuo (con rate)
+  const calculateMortgageStats = (p: Property) => {
+      if (!p.financials?.mortgageAmount || !p.financials?.mortgageDuration || !p.financials?.mortgageStartDate) return null;
+      
+      const installment = safeNum(p.financials.mortgageAmount);
+      const start = new Date(p.financials.mortgageStartDate);
+      const now = new Date();
+      const totalMonths = p.financials.mortgageDuration * 12;
+      
+      // Calcolo mesi trascorsi
+      let elapsedMonths = (now.getFullYear() - start.getFullYear()) * 12 + (now.getMonth() - start.getMonth());
+      elapsedMonths = Math.max(0, Math.min(elapsedMonths, totalMonths)); // Clamp tra 0 e totale
+      
+      const percent = (elapsedMonths / totalMonths) * 100;
+      
+      const totalToPay = installment * totalMonths;
+      const paid = installment * elapsedMonths;
+      const remaining = totalToPay - paid;
+
+      return { percent, paid, remaining, totalToPay, elapsedMonths, totalMonths };
   };
 
   const totalValue = properties.reduce((acc, p) => acc + safeNum(p.currentValue), 0);
@@ -177,8 +209,10 @@ export const PropertyAssetManager: React.FC = () => {
         if (c.frequency === 'MONTHLY') monthlyExpenses += safeNum(c.amount);
         else if (c.frequency === 'YEARLY') monthlyExpenses += safeNum(c.amount) / 12;
     });
-    if (!costs.some(c => c.category === 'MORTGAGE') && selectedProp.financials?.mortgageAmount && selectedProp.financials?.mortgageDuration) {
-        monthlyExpenses += safeNum(selectedProp.financials.mortgageAmount) / (selectedProp.financials.mortgageDuration * 12);
+    // Se non c'è una voce di costo esplicita per il mutuo, lo calcoliamo dai financials
+    // NOTA: mortgageAmount è ora la RATA MENSILE
+    if (!costs.some(c => c.category === 'MORTGAGE') && selectedProp.financials?.mortgageAmount) {
+        monthlyExpenses += safeNum(selectedProp.financials.mortgageAmount);
     }
     const marginPercent = selectedProp.financials?.targetMargin || 0;
     const taxRate = selectedProp.financials?.defaultTaxRate || 21;
@@ -246,16 +280,16 @@ export const PropertyAssetManager: React.FC = () => {
                            <div className="grid grid-cols-1 gap-6">
                                 <div>
                                     <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1 mb-1.5 block">Nome Immobile</label>
-                                    <input type="text" value={selectedProp.name} onChange={e => handleUpdateProperty({...selectedProp, name: e.target.value})} className="w-full p-4 bg-slate-50 border border-slate-200 rounded-xl font-bold text-base lg:text-lg outline-none focus:ring-2 focus:ring-brand-500 text-slate-900" placeholder="Nome Immobile" />
+                                    <input type="text" value={selectedProp.name} onChange={e => setSelectedProp({...selectedProp, name: e.target.value})} className="w-full p-4 bg-slate-50 border border-slate-200 rounded-xl font-bold text-base lg:text-lg outline-none focus:ring-2 focus:ring-brand-500 text-slate-900" placeholder="Nome Immobile" />
                                 </div>
                                 <div>
                                     <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1 mb-1.5 block">Indirizzo</label>
-                                    <input type="text" value={selectedProp.address} onChange={e => handleUpdateProperty({...selectedProp, address: e.target.value})} className="w-full p-4 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-brand-500 text-slate-900" placeholder="Indirizzo" />
+                                    <input type="text" value={selectedProp.address} onChange={e => setSelectedProp({...selectedProp, address: e.target.value})} className="w-full p-4 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-brand-500 text-slate-900" placeholder="Indirizzo" />
                                 </div>
                                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                                     <div>
                                         <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1 mb-1.5 block">Tipo</label>
-                                        <select value={selectedProp.type} onChange={e => handleUpdateProperty({...selectedProp, type: e.target.value as any})} className="w-full p-4 bg-slate-50 border border-slate-200 rounded-xl font-bold text-sm text-slate-900">
+                                        <select value={selectedProp.type} onChange={e => setSelectedProp({...selectedProp, type: e.target.value as any})} className="w-full p-4 bg-slate-50 border border-slate-200 rounded-xl font-bold text-sm text-slate-900">
                                             <option value="RESIDENTIAL">Residenziale</option>
                                             <option value="COMMERCIAL"> Commerciale</option>
                                             <option value="LAND">Terreno</option>
@@ -264,7 +298,7 @@ export const PropertyAssetManager: React.FC = () => {
                                     </div>
                                     <div>
                                         <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1 mb-1.5 block">Stato</label>
-                                        <select value={selectedProp.status} onChange={e => handleUpdateProperty({...selectedProp, status: e.target.value as any})} className="w-full p-4 bg-slate-50 border border-slate-200 rounded-xl font-bold text-sm text-slate-900">
+                                        <select value={selectedProp.status} onChange={e => setSelectedProp({...selectedProp, status: e.target.value as any})} className="w-full p-4 bg-slate-50 border border-slate-200 rounded-xl font-bold text-sm text-slate-900">
                                             <option value="MAIN_RESIDENCE">Abitazione Principale</option>
                                             <option value="RENTED">Affittato</option>
                                             <option value="EMPTY">Sfitto</option>
@@ -273,7 +307,7 @@ export const PropertyAssetManager: React.FC = () => {
                                     </div>
                                     <div>
                                         <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1 mb-1.5 block">Inquilino Attivo</label>
-                                        <select value={selectedProp.currentTenantId || ''} onChange={e => handleUpdateProperty({...selectedProp, currentTenantId: e.target.value || undefined})} className="w-full p-4 bg-slate-50 border border-slate-200 rounded-xl font-bold text-sm text-slate-900">
+                                        <select value={selectedProp.currentTenantId || ''} onChange={e => setSelectedProp({...selectedProp, currentTenantId: e.target.value || undefined})} className="w-full p-4 bg-slate-50 border border-slate-200 rounded-xl font-bold text-sm text-slate-900">
                                             <option value="">Nessun Inquilino</option>
                                             {tenants.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
                                         </select>
@@ -282,22 +316,73 @@ export const PropertyAssetManager: React.FC = () => {
                            </div>
 
                            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 pt-6 border-t border-slate-100">
-                               <div className="space-y-4">
-                                   <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block">Valutazione Immobiliare</label>
-                                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                                       <div className="bg-slate-50 p-4 rounded-xl border border-slate-100">
-                                           <span className="text-[10px] font-bold text-slate-400 block mb-1">Prezzo Acquisto</span>
-                                           <div className="flex items-center">
-                                                <span className="text-slate-400 font-bold mr-1">€</span>
-                                                <input type="number" value={selectedProp.purchasePrice} onChange={e => handleUpdateProperty({...selectedProp, purchasePrice: parseFloat(e.target.value)})} className="w-full bg-transparent font-black text-lg outline-none text-slate-900" />
+                               <div className="space-y-6">
+                                   <div className="space-y-4">
+                                       <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block">Valutazione Immobiliare</label>
+                                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                           <div className="bg-slate-50 p-4 rounded-xl border border-slate-100">
+                                               <span className="text-[10px] font-bold text-slate-400 block mb-1">Prezzo Acquisto</span>
+                                               <div className="flex items-center">
+                                                    <span className="text-slate-400 font-bold mr-1">€</span>
+                                                    <input type="number" value={selectedProp.purchasePrice} onChange={e => setSelectedProp({...selectedProp, purchasePrice: parseFloat(e.target.value)})} className="w-full bg-transparent font-black text-lg outline-none text-slate-900" />
+                                               </div>
+                                           </div>
+                                           <div className="bg-slate-50 p-4 rounded-xl border border-slate-100">
+                                               <span className="text-[10px] font-bold text-slate-400 block mb-1">Valore Attuale</span>
+                                               <div className="flex items-center">
+                                                    <span className="text-slate-400 font-bold mr-1">€</span>
+                                                    <input type="number" value={selectedProp.currentValue} onChange={e => setSelectedProp({...selectedProp, currentValue: parseFloat(e.target.value)})} className="w-full bg-transparent font-black text-lg outline-none text-slate-900" />
+                                               </div>
                                            </div>
                                        </div>
-                                       <div className="bg-slate-50 p-4 rounded-xl border border-slate-100">
-                                           <span className="text-[10px] font-bold text-slate-400 block mb-1">Valore Attuale</span>
-                                           <div className="flex items-center">
-                                                <span className="text-slate-400 font-bold mr-1">€</span>
-                                                <input type="number" value={selectedProp.currentValue} onChange={e => handleUpdateProperty({...selectedProp, currentValue: parseFloat(e.target.value)})} className="w-full bg-transparent font-black text-lg outline-none text-slate-900" />
-                                           </div>
+                                   </div>
+
+                                   <div className="space-y-4">
+                                       <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block">Dettagli Mutuo</label>
+                                       <div className="bg-indigo-50/50 p-4 rounded-xl border border-indigo-100 space-y-4">
+                                            <div>
+                                                <span className="text-[10px] font-bold text-indigo-400 block mb-1">Rata Mensile Mutuo</span>
+                                                <div className="relative">
+                                                    <input 
+                                                        type="number" 
+                                                        value={selectedProp.financials?.mortgageAmount || ''} 
+                                                        onChange={e => setSelectedProp({
+                                                            ...selectedProp, 
+                                                            financials: { ...(selectedProp.financials || { mortgageAmount: 0, condoFees: 0, defaultTaxRate: 21 }), mortgageAmount: parseFloat(e.target.value) || 0 }
+                                                        })} 
+                                                        className="w-full bg-white border border-indigo-200 rounded-lg px-3 py-2 text-sm font-bold outline-none focus:ring-2 focus:ring-indigo-500 text-slate-900 placeholder-indigo-300" 
+                                                        placeholder="Es. 550" 
+                                                    />
+                                                    <span className="absolute right-3 top-1/2 -translate-y-1/2 text-indigo-300 font-bold text-xs">€/mese</span>
+                                                </div>
+                                            </div>
+                                            <div className="grid grid-cols-2 gap-4">
+                                                <div>
+                                                    <span className="text-[10px] font-bold text-indigo-400 block mb-1">Durata (Anni)</span>
+                                                    <input 
+                                                        type="number" 
+                                                        value={selectedProp.financials?.mortgageDuration || ''} 
+                                                        onChange={e => setSelectedProp({
+                                                            ...selectedProp, 
+                                                            financials: { ...(selectedProp.financials || { mortgageAmount: 0, condoFees: 0, defaultTaxRate: 21 }), mortgageDuration: parseFloat(e.target.value) || 0 }
+                                                        })} 
+                                                        className="w-full bg-white border border-indigo-200 rounded-lg px-3 py-2 text-sm font-bold outline-none focus:ring-2 focus:ring-indigo-500 text-slate-900 placeholder-indigo-300" 
+                                                        placeholder="20" 
+                                                    />
+                                                </div>
+                                                <div>
+                                                    <span className="text-[10px] font-bold text-indigo-400 block mb-1">Data Inizio</span>
+                                                    <input 
+                                                        type="date" 
+                                                        value={selectedProp.financials?.mortgageStartDate || ''} 
+                                                        onChange={e => setSelectedProp({
+                                                            ...selectedProp, 
+                                                            financials: { ...(selectedProp.financials || { mortgageAmount: 0, condoFees: 0, defaultTaxRate: 21 }), mortgageStartDate: e.target.value }
+                                                        })} 
+                                                        className="w-full bg-white border border-indigo-200 rounded-lg px-3 py-2 text-xs font-bold outline-none focus:ring-2 focus:ring-indigo-500 text-slate-900" 
+                                                    />
+                                                </div>
+                                            </div>
                                        </div>
                                    </div>
                                </div>
@@ -320,7 +405,7 @@ export const PropertyAssetManager: React.FC = () => {
                                    </div>
                                </div>
                            </div>
-                           <button onClick={() => handleUpdateProperty(selectedProp, true)} className="w-full bg-slate-900 text-white py-4 rounded-2xl font-bold uppercase text-[11px] tracking-widest shadow-xl active:scale-95 transition-all">Salva Modifiche Patrimonio</button>
+                           <button onClick={() => savePropertyToDB(selectedProp)} className="w-full bg-slate-900 text-white py-4 rounded-2xl font-bold uppercase text-[11px] tracking-widest shadow-xl active:scale-95 transition-all">Salva Modifiche Patrimonio</button>
                       </div>
                   </div>
               )}
@@ -454,7 +539,7 @@ export const PropertyAssetManager: React.FC = () => {
                                    <div className="flex justify-between items-center py-3 border-b border-slate-800">
                                        <div className="flex flex-col">
                                           <span className="text-xs text-slate-400">Target Margine</span>
-                                          <input type="number" value={selectedProp.financials?.targetMargin || 0} onChange={e => handleUpdateProperty({...selectedProp, financials: {...selectedProp.financials!, targetMargin: parseFloat(e.target.value)}})} className="bg-transparent text-[10px] font-bold text-brand-400 border-none p-0 focus:ring-0" />
+                                          <input type="number" value={selectedProp.financials?.targetMargin || 0} onChange={e => setSelectedProp({...selectedProp, financials: {...selectedProp.financials!, targetMargin: parseFloat(e.target.value)}})} className="bg-transparent text-[10px] font-bold text-brand-400 border-none p-0 focus:ring-0" />
                                        </div>
                                        <span className="font-bold text-brand-400">{rentWidgetData.marginPercent}%</span>
                                    </div>
@@ -479,7 +564,7 @@ export const PropertyAssetManager: React.FC = () => {
                                <h4 className="text-sm font-bold text-slate-800 uppercase tracking-widest mb-4">Note Strategiche</h4>
                                <textarea 
                                     value={selectedProp.notes || ''} 
-                                    onChange={e => handleUpdateProperty({...selectedProp, notes: e.target.value})}
+                                    onChange={e => setSelectedProp({...selectedProp, notes: e.target.value})}
                                     className="w-full bg-slate-50 border-none rounded-2xl p-4 text-xs font-medium h-40 focus:ring-2 focus:ring-brand-500 resize-none text-slate-900"
                                     placeholder="Annotazioni su inquilini, manutenzioni future, potenziale di vendita..."
                                />
@@ -592,46 +677,75 @@ export const PropertyAssetManager: React.FC = () => {
             <p className="text-sm">Inizia aggiungendo la tua prima proprietà</p>
           </div>
         ) : (
-          properties.map(p => (
-            <div key={p.id} onClick={() => setSelectedProp(p)} className="bg-white p-6 rounded-[2.5rem] shadow-soft border border-slate-100 hover:border-brand-200 transition-all cursor-pointer group relative overflow-hidden text-left">
-              <div className="absolute top-0 right-0 w-24 h-24 bg-brand-50 rounded-full -mr-12 -mt-12 opacity-0 group-hover:opacity-100 transition-all"></div>
-              <div className="flex justify-between items-start mb-4 relative z-10">
-                <div className="flex flex-col min-w-0 pr-4">
-                  <h4 className="font-black text-lg text-slate-900 truncate">{p.name}</h4>
-                  <p className="text-xs text-slate-400 truncate font-medium">{p.address || 'Nessun indirizzo'}</p>
+          properties.map(p => {
+            const mStats = calculateMortgageStats(p);
+            return (
+              <div key={p.id} onClick={() => setSelectedProp(p)} className="bg-white p-6 rounded-[2.5rem] shadow-soft border border-slate-100 hover:border-brand-200 transition-all cursor-pointer group relative overflow-hidden text-left">
+                <div className="absolute top-0 right-0 w-24 h-24 bg-brand-50 rounded-full -mr-12 -mt-12 opacity-0 group-hover:opacity-100 transition-all"></div>
+                <div className="flex justify-between items-start mb-4 relative z-10">
+                  <div className="flex flex-col min-w-0 pr-4">
+                    <h4 className="font-black text-lg text-slate-900 truncate">{p.name}</h4>
+                    <p className="text-xs text-slate-400 truncate font-medium">{p.address || 'Nessun indirizzo'}</p>
+                  </div>
+                  <div className={`px-3 py-1.5 rounded-xl text-[9px] font-bold uppercase shrink-0 ${
+                    p.status === 'RENTED' ? 'bg-emerald-50 text-emerald-600' :
+                    p.status === 'RENOVATION' ? 'bg-amber-50 text-amber-600' :
+                    p.status === 'EMPTY' ? 'bg-rose-50 text-rose-600' : 'bg-indigo-50 text-indigo-600'
+                  }`}>
+                    {p.status === 'RENTED' ? 'Affittato' :
+                    p.status === 'RENOVATION' ? 'Cantiere' :
+                    p.status === 'EMPTY' ? 'Sfitto' : 'Residenza'}
+                  </div>
                 </div>
-                <div className={`px-3 py-1.5 rounded-xl text-[9px] font-bold uppercase shrink-0 ${
-                  p.status === 'RENTED' ? 'bg-emerald-50 text-emerald-600' :
-                  p.status === 'RENOVATION' ? 'bg-amber-50 text-amber-600' :
-                  p.status === 'EMPTY' ? 'bg-rose-50 text-rose-600' : 'bg-indigo-50 text-indigo-600'
-                }`}>
-                  {p.status === 'RENTED' ? 'Affittato' :
-                   p.status === 'RENOVATION' ? 'Cantiere' :
-                   p.status === 'EMPTY' ? 'Sfitto' : 'Residenza'}
+                
+                <div className="grid grid-cols-2 gap-4 mb-4 relative z-10">
+                  <div className="bg-slate-50 p-3 rounded-2xl">
+                    <p className="text-[9px] font-bold text-slate-400 uppercase mb-1">Valore Attuale</p>
+                    <p className="text-sm font-black text-slate-800">€ {safeNum(p.currentValue).toLocaleString()}</p>
+                  </div>
+                  <div className="bg-slate-50 p-3 rounded-2xl">
+                    <p className="text-[9px] font-bold text-slate-400 uppercase mb-1">Costo Acq.</p>
+                    <p className="text-sm font-black text-slate-600">€ {safeNum(p.purchasePrice).toLocaleString()}</p>
+                  </div>
                 </div>
-              </div>
-              
-              <div className="grid grid-cols-2 gap-4 mb-4 relative z-10">
-                <div className="bg-slate-50 p-3 rounded-2xl">
-                   <p className="text-[9px] font-bold text-slate-400 uppercase mb-1">Valore Attuale</p>
-                   <p className="text-sm font-black text-slate-800">€ {safeNum(p.currentValue).toLocaleString()}</p>
-                </div>
-                <div className="bg-slate-50 p-3 rounded-2xl">
-                   <p className="text-[9px] font-bold text-slate-400 uppercase mb-1">Costo Acq.</p>
-                   <p className="text-sm font-black text-slate-600">€ {safeNum(p.purchasePrice).toLocaleString()}</p>
-                </div>
-              </div>
 
-              <div className="flex items-center justify-between pt-4 border-t border-slate-50 relative z-10">
-                <div className="flex items-center gap-2">
-                   <span className="text-xs font-bold text-slate-500">{p.type === 'RESIDENTIAL' ? '🏠' : p.type === 'COMMERCIAL' ? '🏢' : '🌳'} {p.type}</span>
+                {/* Banner Avanzamento Mutuo Dettagliato */}
+                {mStats && (
+                  <div className="mb-6 relative z-10 bg-indigo-50/50 p-3 rounded-2xl border border-indigo-100">
+                    <div className="flex justify-between items-center mb-2">
+                       <span className="text-[8px] font-bold text-indigo-400 uppercase tracking-widest">Stato Mutuo</span>
+                       <span className="text-[9px] font-black text-indigo-600">{mStats.percent.toFixed(0)}%</span>
+                    </div>
+                    <div className="h-1.5 w-full bg-white rounded-full overflow-hidden mb-2">
+                       <div 
+                         className="h-full bg-indigo-500 rounded-full transition-all duration-500" 
+                         style={{ width: `${mStats.percent}%` }}
+                       ></div>
+                    </div>
+                    <div className="flex justify-between text-[9px] font-bold text-indigo-900">
+                        <div className="flex flex-col">
+                            <span className="text-indigo-400 text-[8px] uppercase">Versato</span>
+                            <span>€ {mStats.paid.toLocaleString(undefined, {maximumFractionDigits: 0})}</span>
+                        </div>
+                        <div className="flex flex-col text-right">
+                            <span className="text-indigo-400 text-[8px] uppercase">Residuo</span>
+                            <span>€ {mStats.remaining.toLocaleString(undefined, {maximumFractionDigits: 0})}</span>
+                        </div>
+                    </div>
+                  </div>
+                )}
+
+                <div className="flex items-center justify-between pt-4 border-t border-slate-50 relative z-10">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-bold text-slate-500">{p.type === 'RESIDENTIAL' ? '🏠' : p.type === 'COMMERCIAL' ? '🏢' : '🌳'} {p.type}</span>
+                  </div>
+                  <button onClick={(e) => handleDeleteProperty(p.id, e)} className="text-slate-300 hover:text-rose-500 transition-colors p-2 lg:opacity-0 lg:group-hover:opacity-100">
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M18 6L6 18M6 6l12 12"/></svg>
+                  </button>
                 </div>
-                <button onClick={(e) => handleDeleteProperty(p.id, e)} className="text-slate-300 hover:text-rose-500 transition-colors p-2 lg:opacity-0 lg:group-hover:opacity-100">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M18 6L6 18M6 6l12 12"/></svg>
-                </button>
               </div>
-            </div>
-          ))
+            );
+          })
         )}
       </div>
 
