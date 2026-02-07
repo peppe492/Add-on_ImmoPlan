@@ -1,4 +1,3 @@
-
 import React, { useEffect, useState, useMemo, useRef } from 'react';
 import { db } from '../services/dbService';
 import { Property, RentalRecord, Scenario } from '../types';
@@ -133,9 +132,10 @@ export const GlobalDashboard: React.FC = () => {
 
     props.forEach(p => {
         // Fallback Mutuo da Financials (se non presente nei costi ricorrenti)
+        // NOTA: mortgageAmount è ora interpretato come RATA MENSILE
         const hasMortgageCost = p.recurringCosts?.some(c => c.category === 'MORTGAGE');
         if (!hasMortgageCost && p.financials?.mortgageAmount && p.financials.mortgageDuration) {
-            const monthlyMortgage = p.financials.mortgageAmount / (p.financials.mortgageDuration * 12);
+            const monthlyMortgage = safeNum(p.financials.mortgageAmount);
             // Itera sui mesi del range
             let cursor = new Date(startDate);
             // Normalizza cursore al primo del mese per evitare salti di giorni
