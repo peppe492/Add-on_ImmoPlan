@@ -4,6 +4,7 @@
 **MM's PROPERTY** è una piattaforma *all-in-one* ibrida per la gestione avanzata di investimenti immobiliari, ristrutturazioni e locazioni. Progettata per investitori e property manager, combina strumenti finanziari rigorosi con la potenza dell'Intelligenza Artificiale Generativa (Google Gemini) per offrire analisi strategiche, visualizzazione di design e automazione.
 
 L'applicazione è **cross-platform**: funziona sia come applicazione Desktop nativa (Windows) che come Add-on integrato in Home Assistant.
+<img width="1750" height="886" alt="image" src="https://github.com/user-attachments/assets/1cf499a7-a79d-4529-907b-8188188b3328" />
 
 ---
 
