@@ -1,4 +1,3 @@
-
 {
   "name": "immoplan-desktop",
   "version": "1.0.2",
@@ -61,11 +60,13 @@
     "@google/genai": "latest",
     "cors": "^2.8.5",
     "express": "^4.21.1",
+    "leaflet": "^1.9.4",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "recharts": "^2.13.3"
   },
   "devDependencies": {
+    "@types/leaflet": "^1.9.21",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.3",

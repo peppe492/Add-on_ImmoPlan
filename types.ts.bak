@@ -160,7 +160,6 @@ export interface Property {
     condoFees: number;
     defaultTaxRate: number;
     targetMargin?: number;
-    initialInvestment?: number;
   };
   recurringCosts?: RecurringCost[];
   currentTenantId?: string; 
