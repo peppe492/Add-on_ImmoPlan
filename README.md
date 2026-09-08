@@ -24,7 +24,7 @@ L'applicazione è **cross-platform**: funziona sia come applicazione Desktop nat
     *   Sincronizzazione sensore HA `sensor.immoplan_calendar_deadlines` con eventi in formato JSON per card Lovelace.
 
 *   ⚙️ **Pannello Amministrazione Riprogettato (Bento Grid 12 Colonne):**
-    *   **Anagrafica Utenti & Cointestatari Personalizzabile:** Possibilità di modificare i nomi dei due proprietari/beneficiari usati in tutta l'app (default: *Giuseppe* e *Claudia*), con aggiornamento atomico a cascata su scenari, portafogli e fatture nel database.
+    *   **Anagrafica Utenti & Cointestatari Personalizzabile:** Possibilità di modificare i nomi dei due proprietari/beneficiari usati in tutta l'app, con aggiornamento atomico a cascata su scenari, portafogli e fatture nel database.
     *   Navigazione fluida a pillole con scorrimento animato alle sezioni.
     *   Mini-cruscotto KPI dello stato database IndexedDB.
     *   Gestione intuitiva dei sensori personalizzati Home Assistant con prefisso e validazione target.
@@ -46,12 +46,9 @@ L'applicazione è **cross-platform**: funziona sia come applicazione Desktop nat
 *   Selettore dinamico degli anni del piano di ammortamento decennale.
 *   Archivio documenti con anteprima rapida e guida al bonifico parlante.
 
-### 🤖 AI Powerhouse (Powered by Google Gemini)
+### 🤖 AI Powerhouse Chat (Gemini API key richiesta)
 *   **AI Advisor Strategico:** Analisi automatica del piano finanziario per individuare rischi e opportunità (modello *Gemini 3 Pro*).
-*   **Live Consultant Vocale:** Interazione vocale in tempo reale per discutere del progetto come con un consulente umano (modello *Gemini 2.5 Flash Native Audio*).
-*   **Interior Designer:** Modifica delle foto degli ambienti esistenti tramite prompt testuale (modello *Imagen/Gemini Vision*).
-*   **Video Walkthrough:** Generazione di video cinematici per visualizzare il potenziale dell'immobile (modello *Veo 3.1*).
-*   **Market Intelligence:** Ricerca di mercato con dati aggiornati e mappe (Google Search & Maps Grounding).
+*   **Live Chat:** interagisci tramite chat con tutti i dati caricati ed associati agli immobili
 
 ### 📋 Gestione Locazioni e Patrimonio
 *   **📈 Storico Valutazioni Reali:** Inserimento di valutazioni storiche reali periodiche (data e valore) per ogni immobile. I grafici dell'andamento patrimoniale integrano i valori effettivi disattivando le stime lineari.
@@ -100,9 +97,9 @@ I dati sono salvati localmente per garantire la privacy e la portabilità:
 ## 🚀 Installazione
 
 ### Home Assistant (Add-on)
-1.  Aggiungi il repository locale o copia la cartella in `/addons/`.
+1.  Aggiungi il repository locale o copia la cartella in `/addons/` o ancora iserisci il link addon https://github.com/peppe492/Add-on_ImmoPlan
 2.  Installa l'add-on.
-3.  Configura la `api_key` di Google Gemini nella tab **Configurazione**.
+3.  Configura la `api_key` di Google Gemini e il token Home Assistant nella tab **Configurazione**.
 4.  Avvia e apri la Web UI.
 
 ### Windows (Sviluppo)
