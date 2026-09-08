@@ -15,45 +15,33 @@ import { FinancialData, MainTab, PurchaseTab, PropertyTab, Scenario, SystemLog }
 import { db } from './services/dbService';
 
 const INITIAL_DATA: FinancialData = {
-  propertyName: 'Progetto Demo: Loft Navigli',
-  totalPrice: 245000,
+  propertyName: '',
+  totalPrice: 0,
   propertyPayments: [],
-  totalBudget: 310000,
+  totalBudget: 0,
   theme: 'DEFAULT',
   owner1Name: 'Giuseppe',
   owner2Name: 'Claudia',
   portfolios: [
-    { id: 'p1', name: 'Risparmi Giuseppe', owner: 'Giuseppe', initialBalance: 65000 },
-    { id: 'p2', name: 'Fondo Casa Claudia', owner: 'Claudia', initialBalance: 40000 }
+    { id: 'p1', name: 'Risparmi Utente 1', owner: 'Giuseppe', initialBalance: 0 },
+    { id: 'p2', name: 'Fondo Casa Utente 2', owner: 'Claudia', initialBalance: 0 }
   ],
   loanPercentage: 80,
   purchaseCosts: {
-    deposit: {
-      amount: 15000,
-      isPaid: true,
-      paidAmount: 15000,
-      paymentDate: '2024-01-15',
-      assignments: [{ portfolioId: 'p1', amount: 15000, date: '2024-01-15' }]
-    },
-    balance: { amount: 34000, isPaid: false, assignments: [] },
-    notary: { amount: 3800, isPaid: false, assignments: [] },
-    agency: { amount: 7350, isPaid: false, assignments: [] },
-    taxes: { amount: 2000, isPaid: true, paidAmount: 2000, paymentDate: '2024-02-01', assignments: [{ portfolioId: 'p2', amount: 2000, date: '2024-02-01' }] },
-    other: { amount: 500, isPaid: false, assignments: [] },
+    deposit: { amount: 0, isPaid: false, assignments: [] },
+    balance: { amount: 0, isPaid: false, assignments: [] },
+    notary: { amount: 0, isPaid: false, assignments: [] },
+    agency: { amount: 0, isPaid: false, assignments: [] },
+    taxes: { amount: 0, isPaid: false, assignments: [] },
+    other: { amount: 0, isPaid: false, assignments: [] },
   },
   renovationCosts: {
-    works: 45000,
-    worksBreakdown: [
-      { id: 'w1', description: 'Rifacimento Bagno Master', amount: 8500, isPaid: false, assignments: [] },
-      { id: 'w2', description: 'Impianto Elettrico Certificato', amount: 4500, isPaid: false, assignments: [] }
-    ],
-    materials: 12000,
-    materialsBreakdown: [
-      { id: 'm1', description: 'Parquet Rovere (65mq)', amount: 4200, isPaid: false, assignments: [] },
-      { id: 'm2', description: 'Rivestimenti Marazzi', amount: 1800, isPaid: false, assignments: [] }
-    ],
-    design: { amount: 3500, isPaid: true, paidAmount: 1500, paymentDate: '2024-02-10', assignments: [{ portfolioId: 'p1', amount: 1500, date: '2024-02-10' }] },
-    contingency: 5000,
+    works: 0,
+    worksBreakdown: [],
+    materials: 0,
+    materialsBreakdown: [],
+    design: { amount: 0, isPaid: false, assignments: [] },
+    contingency: 0,
   },
   customSensors: []
 };

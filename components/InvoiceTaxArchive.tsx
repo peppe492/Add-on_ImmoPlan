@@ -335,25 +335,8 @@ export const InvoiceTaxArchive: React.FC<InvoiceTaxArchiveProps> = ({
 
       if (invs && invs.length > 0) {
         setInvoices(invs);
-        localStorage.setItem('immoplan_invoices_initialized', 'true');
       } else {
-        const hasInitialized = localStorage.getItem('immoplan_invoices_initialized');
-        if (!hasInitialized) {
-          // Seed with realistic sample invoices if DB has never been initialized
-          const o1 = (appData && appData.owner1Name) || propOwner1 || 'Giuseppe';
-          const o2 = (appData && appData.owner2Name) || propOwner2 || 'Claudia';
-          const customizedSamples = SAMPLE_INVOICES.map(sample => {
-            let ben = sample.beneficiary;
-            if (ben === 'Giuseppe') ben = o1;
-            else if (ben === 'Claudia') ben = o2;
-            return { ...sample, beneficiary: ben };
-          });
-          await db.saveInvoicesBatch(customizedSamples);
-          setInvoices(customizedSamples);
-          localStorage.setItem('immoplan_invoices_initialized', 'true');
-        } else {
-          setInvoices([]);
-        }
+        setInvoices([]);
       }
     } catch (err) {
       console.error('Error loading invoices:', err);
