@@ -1,0 +1,10 @@
+{
+  "name": "Addon MM's PROPERTY - DB",
+  "description": "HA version with DB\n",
+  "requestFramePermissions": [
+    "camera",
+    "microphone",
+    "geolocation"
+  ],
+  "hass_api": true
+}
