@@ -3,7 +3,7 @@ name: "MM's PROPERTY Manager"
 version: "1.4.0"
 slug: "mm_property_manager"
 description: "Gestione avanzata costi immobiliari, ristrutturazioni e affitti con AI Gemini, Archivio Detrazioni Fiscali 730, Calendario Scadenze e supporto mappe."
-url: "https://github.com/peppe492/Add-on_ImmoPlan-latest"
+url: "https://github.com/peppe492/Add-on_ImmoPlan"
 arch:
   - aarch64
   - amd64
