@@ -297,55 +297,62 @@ export const RentalManager: React.FC = () => {
                            const prop = properties.find(p => p.id === rec.propertyId);
                            const propName = prop?.name || 'Immobile sconosciuto';
                            
-                           // Calcolo tasse automatiche se non presenti (calcolate sul canone di affitto puro, escludendo le spese rimborsate)
-                           const taxRate = prop?.financials?.defaultTaxRate || 0;
-                           const taxableIncome = Math.max(0, rec.income - (rec.condo || 0) - (rec.utilities || 0) - (rec.internet || 0));
-                           const estimatedTax = (rec.taxes === 0 && taxRate > 0) ? (taxableIncome * taxRate / 100) : 0;
-                           
-                           const totalExpenses = (rec.mortgage || 0) + (rec.condo || 0) + (rec.utilities || 0) + (rec.internet || 0) + (rec.maintenance || 0) + (rec.taxes || 0) + (rec.other || 0) + estimatedTax;
-                           const net = rec.income - totalExpenses;
-                           const dateLabel = new Date(rec.transactionDate).toLocaleDateString('it-IT', { month: 'long', year: 'numeric' });
+                            // Calcolo tasse automatiche se non presenti (calcolate sul canone di affitto puro, escludendo le spese rimborsate)
+                            const taxRate = prop?.financials?.defaultTaxRate !== undefined ? prop.financials.defaultTaxRate : 0;
+                            const isComodatoOrExempt = taxRate === 0 || rec.isTaxable === false;
+                            const taxableIncome = Math.max(0, rec.income - (rec.condo || 0) - (rec.utilities || 0) - (rec.internet || 0));
+                            const estimatedTax = (!isComodatoOrExempt && rec.taxes === 0 && taxRate > 0) ? (taxableIncome * taxRate / 100) : 0;
+                            
+                            const totalExpenses = (rec.mortgage || 0) + (rec.condo || 0) + (rec.utilities || 0) + (rec.internet || 0) + (rec.maintenance || 0) + (rec.taxes || 0) + (rec.other || 0) + estimatedTax;
+                            const net = rec.income - totalExpenses;
+                            const dateLabel = new Date(rec.transactionDate).toLocaleDateString('it-IT', { month: 'long', year: 'numeric' });
 
-                           return (
-                               <div key={rec.id} className="bg-white p-6 rounded-3xl shadow-soft border border-slate-100 hover:border-brand-200 transition-all group">
-                                   <div className="flex justify-between items-start mb-4">
-                                       <div className="flex items-center gap-3">
-                                           <div className="w-12 h-12 rounded-2xl bg-slate-50 flex flex-col items-center justify-center border border-slate-100">
-                                               <span className="text-[10px] font-bold text-slate-400 uppercase">{dateLabel.split(' ')[0].substring(0,3)}</span>
-                                               <span className="text-sm font-black text-slate-800">{rec.year}</span>
-                                           </div>
-                                           <div>
-                                               <h4 className="font-bold text-slate-900">{propName}</h4>
-                                               <p className="text-xs text-slate-400 capitalize flex items-center gap-2">
-                                                 {dateLabel}
-                                                 {rec.attachment && (
-                                                   <a 
-                                                     href={rec.attachment.data} 
-                                                     download={rec.attachment.name}
-                                                     className="bg-slate-100 text-brand-600 px-2 py-0.5 rounded text-[9px] font-bold hover:bg-brand-50 flex items-center gap-1"
-                                                     title="Scarica allegato"
-                                                     onClick={(e) => e.stopPropagation()}
-                                                   >
-                                                     <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="shrink-0 inline mr-1"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg> {rec.attachment.name.length > 15 ? rec.attachment.name.substring(0,12) + '...' : rec.attachment.name}
-                                                   </a>
-                                                 )}
-                                               </p>
-                                               {rec.notes && <p className="text-[10px] text-slate-500 italic mt-1 max-w-xs truncate">{rec.notes}</p>}
-                                           </div>
-                                       </div>
-                                       <div className="text-right">
-                                           <p className="text-[10px] font-bold text-slate-400 uppercase">Cashflow Netto</p>
-                                           <p className={`text-xl font-black ${net >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
-                                               {net >= 0 ? '+' : ''}€ {net.toLocaleString()}
-                                           </p>
-                                           {estimatedTax > 0 && <p className="text-[9px] text-slate-400">Incl. tasse est. {taxRate}%</p>}
-                                       </div>
-                                   </div>
-                                   <div className="flex justify-end gap-3 mt-4 opacity-0 group-hover:opacity-100 transition-opacity">
-                                       <button onClick={() => { setFormData(rec); setIsFormOpen(true); }} className="text-xs font-bold text-brand-600">Modifica</button>
-                                       <button onClick={() => handleDeleteRecord(rec.id)} className="text-xs font-bold text-rose-500">Elimina</button>
-                                   </div>
-                               </div>
+                            return (
+                                <div key={rec.id} className="bg-white p-6 rounded-3xl shadow-soft border border-slate-100 hover:border-brand-200 transition-all group">
+                                    <div className="flex justify-between items-start mb-4">
+                                        <div className="flex items-center gap-3">
+                                            <div className="w-12 h-12 rounded-2xl bg-slate-50 flex flex-col items-center justify-center border border-slate-100">
+                                                <span className="text-[10px] font-bold text-slate-400 uppercase">{dateLabel.split(' ')[0].substring(0,3)}</span>
+                                                <span className="text-sm font-black text-slate-800">{rec.year}</span>
+                                            </div>
+                                            <div>
+                                                <h4 className="font-bold text-slate-900">{propName}</h4>
+                                                <p className="text-xs text-slate-400 capitalize flex items-center gap-2">
+                                                  {dateLabel}
+                                                  {rec.attachment && (
+                                                    <a 
+                                                      href={rec.attachment.data} 
+                                                      download={rec.attachment.name}
+                                                      className="bg-slate-100 text-brand-600 px-2 py-0.5 rounded text-[9px] font-bold hover:bg-brand-50 flex items-center gap-1"
+                                                      title="Scarica allegato"
+                                                      onClick={(e) => e.stopPropagation()}
+                                                    >
+                                                      <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="shrink-0 inline mr-1"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg> {rec.attachment.name.length > 15 ? rec.attachment.name.substring(0,12) + '...' : rec.attachment.name}
+                                                    </a>
+                                                  )}
+                                                </p>
+                                                {rec.notes && <p className="text-[10px] text-slate-500 italic mt-1 max-w-xs truncate">{rec.notes}</p>}
+                                            </div>
+                                        </div>
+                                        <div className="text-right">
+                                            <p className="text-[10px] font-bold text-slate-400 uppercase">Cashflow Netto</p>
+                                            <p className={`text-xl font-black ${net >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
+                                                {net >= 0 ? '+' : ''}€ {net.toLocaleString()}
+                                            </p>
+                                            {isComodatoOrExempt ? (
+                                              <span className="inline-block mt-1 bg-emerald-50 text-emerald-700 border border-emerald-200 text-[9px] font-bold px-2 py-0.5 rounded-full">
+                                                Comodato / Esente (0%)
+                                              </span>
+                                            ) : estimatedTax > 0 ? (
+                                              <p className="text-[9px] text-slate-400">Incl. tasse est. {taxRate}%</p>
+                                            ) : null}
+                                        </div>
+                                    </div>
+                                    <div className="flex justify-end gap-3 mt-4 opacity-0 group-hover:opacity-100 transition-opacity">
+                                        <button onClick={() => { setFormData(rec); setIsFormOpen(true); }} className="text-xs font-bold text-brand-600">Modifica</button>
+                                        <button onClick={() => handleDeleteRecord(rec.id)} className="text-xs font-bold text-rose-500">Elimina</button>
+                                    </div>
+                                </div>
                            );
                        })
                    )}
@@ -389,6 +396,19 @@ export const RentalManager: React.FC = () => {
                                <div className="grid grid-cols-2 gap-3">
                                    <input type="number" placeholder="Condominio" value={formData.condo} onChange={e => setFormData({...formData, condo: parseFloat(e.target.value)})} className="w-full bg-slate-50 border-0 rounded-xl p-2 text-sm font-bold ring-1 ring-slate-200" />
                                    <input type="number" placeholder="Utenze" value={formData.utilities} onChange={e => setFormData({...formData, utilities: parseFloat(e.target.value)})} className="w-full bg-slate-50 border-0 rounded-xl p-2 text-sm font-bold ring-1 ring-slate-200" />
+                               </div>
+
+                               <div className="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-200">
+                                   <div>
+                                       <span className="text-xs font-bold text-slate-700 block">Soggetto a Tassazione</span>
+                                       <span className="text-[10px] text-slate-400">Disattiva se comodato d'uso, rimborso spese o esente</span>
+                                   </div>
+                                   <input 
+                                       type="checkbox" 
+                                       checked={formData.isTaxable !== false} 
+                                       onChange={e => setFormData({...formData, isTaxable: e.target.checked})}
+                                       className="w-4 h-4 rounded text-brand-600 focus:ring-brand-500 cursor-pointer"
+                                   />
                                </div>
 
                                <div>
@@ -477,7 +497,33 @@ export const RentalManager: React.FC = () => {
 
                    {/* Input Tasse */}
                    <div className="bg-slate-50 p-6 rounded-2xl border border-slate-100">
-                       <label className="block text-xs font-bold text-slate-400 uppercase mb-2">Tassazione (Cedolare/IRPEF)</label>
+                        <div className="flex justify-between items-center mb-2">
+                           <label className="block text-xs font-bold text-slate-400 uppercase">Tassazione (Cedolare/IRPEF)</label>
+                           <div className="flex gap-1">
+                              <button
+                                type="button"
+                                onClick={() => setSimData({...simData, tax: 0})}
+                                className={`text-[10px] px-2 py-0.5 rounded font-bold transition-all ${simData.tax === 0 ? 'bg-emerald-600 text-white shadow-sm' : 'bg-slate-200 text-slate-600 hover:bg-slate-300'}`}
+                                title="0% Comodato d'uso gratuito o esente"
+                              >
+                                0% Comodato
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setSimData({...simData, tax: 10})}
+                                className={`text-[10px] px-2 py-0.5 rounded font-bold transition-all ${simData.tax === 10 ? 'bg-indigo-600 text-white shadow-sm' : 'bg-slate-200 text-slate-600 hover:bg-slate-300'}`}
+                              >
+                                10%
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setSimData({...simData, tax: 21})}
+                                className={`text-[10px] px-2 py-0.5 rounded font-bold transition-all ${simData.tax === 21 ? 'bg-indigo-600 text-white shadow-sm' : 'bg-slate-200 text-slate-600 hover:bg-slate-300'}`}
+                              >
+                                21%
+                              </button>
+                           </div>
+                        </div>
                        <div className="relative">
                           <input 
                             type="number" 

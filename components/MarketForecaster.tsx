@@ -222,6 +222,7 @@ export const MarketForecaster: React.FC<MarketForecasterProps> = ({ property, on
               value={config.taxRegime}
               onChange={e => handleConfigChange('taxRegime', e.target.value as any)}
             >
+              <option value="ESENTE_0">0% · Comodato d'Uso / Esente</option>
               <option value="CEDOLARE_21">Cedolare Secca 21% (Libero)</option>
               <option value="CEDOLARE_10">Cedolare Secca 10% (Concordato)</option>
               <option value="IRPEF_ORDINARIA">Tassazione Ord. IRPEF (Marginale)</option>

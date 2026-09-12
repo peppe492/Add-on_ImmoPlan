@@ -30,7 +30,7 @@ export const ContactManager: React.FC = () => {
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [theme, setTheme] = useState<'DEFAULT' | 'NEON'>('DEFAULT');
-  const blank = { name: '', email: '', phone: '', iban: '', taxCode: '', notes: '', attachments: [] as Attachment[] };
+  const blank = { name: '', email: '', phone: '', iban: '', taxCode: '', contractType: 'LIBERO_4_4', notes: '', attachments: [] as Attachment[] };
   const [formData, setFormData] = useState<any>(blank);
 
   useEffect(() => {
@@ -106,7 +106,15 @@ export const ContactManager: React.FC = () => {
                         <div className="ccstat"><span className="micro">Immobili</span><span className="num v">{stats.count}</span></div>
                         <div className="ccstat"><span className="micro">Volume (Tot. Pagato)</span><span className="num v pos">€ {fmt(stats.money)}</span></div>
                       </div>
-                      <div className="ccfoot"><span className="ccphone">{ic(PATH.phone, 12)} {item.phone || 'N/D'}</span>{(item.attachments?.length ?? 0) > 0 && <span className="ccdocs">{ic(PATH.clip, 11)} {item.attachments?.length} doc</span>}</div>
+                      <div className="ccfoot">
+                        <span className="ccphone">{ic(PATH.phone, 12)} {item.phone || 'N/D'}</span>
+                        {activeType === 'TENANT' && (item as Tenant).contractType === 'COMODATO_USO' && (
+                          <span style={{ fontSize: '9px', padding: '1px 6px', borderRadius: '4px', background: 'rgba(16, 185, 129, 0.15)', color: '#10b981', fontWeight: 700 }}>
+                            Comodato (0%)
+                          </span>
+                        )}
+                        {(item.attachments?.length ?? 0) > 0 && <span className="ccdocs">{ic(PATH.clip, 11)} {item.attachments?.length} doc</span>}
+                      </div>
                     </div>
                   );
                 })}
@@ -125,6 +133,22 @@ export const ContactManager: React.FC = () => {
                     <div className="field"><label>Cod. Fiscale</label><input className="input mono" type="text" value={formData.taxCode} onChange={e => setFormData({ ...formData, taxCode: e.target.value })} /></div>
                   </div>
                   <div className="field"><label>Email</label><input className="input" type="email" value={formData.email} onChange={e => setFormData({ ...formData, email: e.target.value })} /></div>
+                  {activeType === 'TENANT' && (
+                    <div className="field">
+                      <label>Tipologia Contratto</label>
+                      <select 
+                        className="input" 
+                        value={formData.contractType || 'LIBERO_4_4'} 
+                        onChange={e => setFormData({ ...formData, contractType: e.target.value })}
+                      >
+                        <option value="LIBERO_4_4">Canone Libero (4+4)</option>
+                        <option value="CONCORDATO_3_2">Canone Concordato (3+2 - Aliquota 10%)</option>
+                        <option value="COMODATO_USO">Comodato d'Uso Gratuito (Esente Tasse 0%)</option>
+                        <option value="TRANSITORIO">Transitorio</option>
+                        <option value="STUDENTI">Studenti Universitari</option>
+                      </select>
+                    </div>
+                  )}
                   {activeType === 'LANDLORD' && <div className="field"><label>IBAN</label><input className="input mono" type="text" value={formData.iban} onChange={e => setFormData({ ...formData, iban: e.target.value })} /></div>}
                   <div className="field"><label>Documenti &amp; Allegati</label>
                     {(formData.attachments?.length ?? 0) > 0 && <div className="attchips">{formData.attachments.map((att: Attachment, i: number) => <div className="attchip" key={i}><span>{att.name}</span><button onClick={() => removeAttachment(i)}>✕</button></div>)}</div>}

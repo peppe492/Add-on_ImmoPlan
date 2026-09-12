@@ -653,6 +653,13 @@ export const HELP_FAQS: FaqItem[] = [
     tags: ['Cedolare Secca', 'Canone Concordato', 'IMU', 'Tasse']
   },
   {
+    id: 'faq_comodato_uso_zero_tax',
+    category: 'TAXES_BONUS',
+    question: 'Come posso gestire un contratto di Comodato d\'Uso Gratuito o con canone/rimborso esente da tasse (0%)?',
+    answer: 'ImmoPlan supporta nativamente l\'aliquota al 0% (Esente / Comodato d\'Uso). Nella scheda dell\'Immobile puoi impostare l\'Aliquota Tasse a 0% tramite l\'apposito badge rapido "0% Comodato", oppure nel Gestore Contratti & Affitti puoi disattivare la casella "Soggetto a Tassazione" per la singola mensilità. In questo modo il calcolo del Cashflow Netto considererà 0 € di imposte trattenute, trasferendo il 100% dell\'incasso o del rimborso spese concordato nel reddito netto operativo.',
+    tags: ['Comodato d\'Uso', 'Aliquota 0%', 'Tasse', 'Esente', 'Affitto']
+  },
+  {
     id: 'faq_bonifico_ordinario_error',
     category: 'TAXES_BONUS',
     question: 'Cosa succede se per errore pago una fattura di ristrutturazione con bonifico ordinario invece che parlante?',

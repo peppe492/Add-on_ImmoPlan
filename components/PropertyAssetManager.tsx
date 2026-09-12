@@ -283,7 +283,7 @@ export const PropertyAssetManager: React.FC = () => {
     oneOffExpenses = totalOneOffInLastYear / 12;
     const totalExpenses = fixedExpenses + oneOffExpenses;
     const marginPercent = selectedProp.financials?.targetMargin || 0;
-    const taxRate = selectedProp.financials?.defaultTaxRate || 21;
+    const taxRate = selectedProp.financials?.defaultTaxRate !== undefined ? selectedProp.financials.defaultTaxRate : 21;
     const desiredNetIncome = totalExpenses * (1 + (marginPercent / 100));
     const suggestedRent = taxRate < 100 ? desiredNetIncome / (1 - (taxRate / 100)) : 0;
     const estimatedTax = suggestedRent * (taxRate / 100);
@@ -306,7 +306,7 @@ export const PropertyAssetManager: React.FC = () => {
     });
     
     // Aggiungi tasse in base all'aliquota se non presenti nella lista spese
-    if (!costs.some(c => c.category === 'TAX') && p.financials?.defaultTaxRate && annualRent > 0) {
+    if (!costs.some(c => c.category === 'TAX') && p.financials?.defaultTaxRate !== undefined && p.financials.defaultTaxRate > 0 && annualRent > 0) {
       annualOperatingExpenses += annualRent * (p.financials.defaultTaxRate / 100);
     }
     
@@ -438,10 +438,42 @@ export const PropertyAssetManager: React.FC = () => {
                         onChange={e => setSelectedProp({ ...p, financials: { ...(p.financials || { mortgageAmount: 0, condoFees: 0, defaultTaxRate: 21 }), monthlyRent: parseFloat(e.target.value) || 0 } })} 
                         placeholder="Es. 800" />
                     </div>
-                    <div className="field"><label>Aliquota Tasse (%)</label>
-                      <input className="input mono" type="number" value={p.financials?.defaultTaxRate || ''} 
-                        onChange={e => setSelectedProp({ ...p, financials: { ...(p.financials || { mortgageAmount: 0, condoFees: 0, defaultTaxRate: 21 }), defaultTaxRate: parseFloat(e.target.value) || 0 } })} 
-                        placeholder="Es. 21" />
+                    <div className="field">
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                        <label>Aliquota Tasse (%)</label>
+                        <div style={{ display: 'flex', gap: '4px' }}>
+                          <button
+                            type="button"
+                            className={`badge ${p.financials?.defaultTaxRate === 0 ? 'bg-emerald-600 text-white' : 'bg-slate-700 text-slate-300'}`}
+                            style={{ fontSize: '10px', padding: '2px 6px', cursor: 'pointer', borderRadius: '4px', border: 'none' }}
+                            onClick={() => setSelectedProp({ ...p, financials: { ...(p.financials || { mortgageAmount: 0, condoFees: 0, defaultTaxRate: 0 }), defaultTaxRate: 0 } })}
+                            title="Comodato d'uso o canone esente (0% IRPEF/Cedolare)"
+                          >
+                            0% Comodato
+                          </button>
+                          <button
+                            type="button"
+                            className={`badge ${p.financials?.defaultTaxRate === 10 ? 'bg-indigo-600 text-white' : 'bg-slate-700 text-slate-300'}`}
+                            style={{ fontSize: '10px', padding: '2px 6px', cursor: 'pointer', borderRadius: '4px', border: 'none' }}
+                            onClick={() => setSelectedProp({ ...p, financials: { ...(p.financials || { mortgageAmount: 0, condoFees: 0, defaultTaxRate: 10 }), defaultTaxRate: 10 } })}
+                            title="Canone concordato (10%)"
+                          >
+                            10%
+                          </button>
+                          <button
+                            type="button"
+                            className={`badge ${p.financials?.defaultTaxRate === 21 ? 'bg-indigo-600 text-white' : 'bg-slate-700 text-slate-300'}`}
+                            style={{ fontSize: '10px', padding: '2px 6px', cursor: 'pointer', borderRadius: '4px', border: 'none' }}
+                            onClick={() => setSelectedProp({ ...p, financials: { ...(p.financials || { mortgageAmount: 0, condoFees: 0, defaultTaxRate: 21 }), defaultTaxRate: 21 } })}
+                            title="Cedolare secca ordinaria (21%)"
+                          >
+                            21%
+                          </button>
+                        </div>
+                      </div>
+                      <input className="input mono" type="number" min="0" max="100" step="0.5" value={p.financials?.defaultTaxRate ?? ''} 
+                        onChange={e => setSelectedProp({ ...p, financials: { ...(p.financials || { mortgageAmount: 0, condoFees: 0, defaultTaxRate: 21 }), defaultTaxRate: e.target.value === '' ? 0 : parseFloat(e.target.value) } })} 
+                        placeholder="Es. 0 o 21" />
                     </div>
                   </div>
                   <div className="field" style={{ marginTop: '10px' }}><label>Capitale Iniziale Investito (Anticipo + Spese Rogito)</label>

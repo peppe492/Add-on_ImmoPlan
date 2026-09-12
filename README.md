@@ -16,6 +16,7 @@ L'applicazione è **cross-platform**: funziona sia come applicazione Desktop nat
     *   **Direttiva Europea "Case Verdi" (EPBD):** Modulazione del deprezzamento/apprezzamento in base alla classe energetica (-2.0% annuo per classi E, F, G; +1.5% annuo per classi virtuose A e B).
     *   **Piano di Ammortamento Francese:** Ricalcolo mensile dinamico della quota capitale vs quota interessi del mutuo e accumulo dell'equità netta.
     *   **Benchmark Finanziario ETF World:** Comparazione opzionale con rendimento composto (6-8% annuo) applicato al capitale liquido proprio effettivamente investito (*Acquisto + Spese + Ristrutturazione - Mutuo*).
+    *   **Supporto Contratti Comodato d'Uso & Tassazione 0%:** Gestione completa delle locazioni a canone concordato o libero, contratti di comodato d'uso gratuito con rimborso spese o esenti (0% IRPEF/Cedolare), sia nel motore previsionale multi-anno che nel registro incassi e calcolo Cap Rate / Cash-on-Cash.
     *   **Sensori Home Assistant Dedicati:** Esposizione automatica delle metriche di previsione (`sensor.immoplan_<id>_valore_stimato_5a`, `sensor.immoplan_<id>_rendimento_netto_proiettato`, `sensor.immoplan_<id>_equita_netta`, `sensor.immoplan_<id>_diff_etf_world_10a`).
 
 *   📚 **Centro Guide & Manuali Integrato nell'App (HelpCenter):**

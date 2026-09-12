@@ -127,6 +127,7 @@ export interface Tenant {
   email?: string;
   phone?: string;
   taxCode?: string;
+  contractType?: 'LIBERO_4_4' | 'CONCORDATO_3_2' | 'TRANSITORIO' | 'STUDENTI' | 'COMODATO_USO';
   notes?: string;
   attachments?: Attachment[];
   createdAt: string;
@@ -178,7 +179,7 @@ export interface ForecastSimulationConfig {
   targetEnergyClass?: 'A' | 'B' | 'C' | 'D' | 'E' | 'F' | 'G';
   enableEtfBenchmark: boolean; // toggle
   etfAnnualReturn?: number; // % (e.g. 7.0 for ETF World)
-  taxRegime: 'CEDOLARE_21' | 'CEDOLARE_10' | 'IRPEF_ORDINARIA';
+  taxRegime: 'ESENTE_0' | 'CEDOLARE_21' | 'CEDOLARE_10' | 'IRPEF_ORDINARIA';
   ownerMarginalTaxRate?: number; // % (e.g. 35 or 43)
 }
 

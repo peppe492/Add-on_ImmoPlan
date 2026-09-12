@@ -394,7 +394,8 @@ app.post('/api/forecast/run-batch', (req, res) => {
         });
       }
 
-      const taxRate = (prop.financials?.defaultTaxRate === 10) ? 0.10 : 0.21;
+      const defaultTax = prop.financials?.defaultTaxRate;
+      const taxRate = defaultTax === 0 ? 0 : (defaultTax === 10 ? 0.10 : (defaultTax !== undefined ? defaultTax / 100 : 0.21));
 
       let cumulativeNetCashFlow = 0;
       const yearlyProjections = [];
@@ -451,7 +452,7 @@ app.post('/api/forecast/run-batch', (req, res) => {
           currentEnergyClass: prop.energyClass || 'D',
           enableEtfBenchmark: true,
           etfAnnualReturn: 7.0,
-          taxRegime: prop.financials?.defaultTaxRate === 10 ? 'CEDOLARE_10' : 'CEDOLARE_21'
+          taxRegime: prop.financials?.defaultTaxRate === 0 ? 'ESENTE_0' : (prop.financials?.defaultTaxRate === 10 ? 'CEDOLARE_10' : 'CEDOLARE_21')
         },
         yearlyProjections,
         metrics: {

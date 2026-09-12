@@ -19,7 +19,11 @@ export const getDefaultSimulationConfig = (property?: Property): ForecastSimulat
     targetEnergyClass: 'A',
     enableEtfBenchmark: true,
     etfAnnualReturn: 7.0,     // 7.0% nominal return for MSCI World ETF
-    taxRegime: property?.financials?.defaultTaxRate === 10 ? 'CEDOLARE_10' : 'CEDOLARE_21',
+    taxRegime: property?.financials?.defaultTaxRate === 0
+      ? 'ESENTE_0'
+      : property?.financials?.defaultTaxRate === 10
+      ? 'CEDOLARE_10'
+      : 'CEDOLARE_21',
     ownerMarginalTaxRate: 35
   };
 };
@@ -200,7 +204,9 @@ export const calculatePropertyForecast = (
 
     // Tax Regime Calculation
     let taxAmount = 0;
-    if (config.taxRegime === 'CEDOLARE_21') {
+    if (config.taxRegime === 'ESENTE_0') {
+      taxAmount = 0;
+    } else if (config.taxRegime === 'CEDOLARE_21') {
       taxAmount = effectiveGrossRent * 0.21;
     } else if (config.taxRegime === 'CEDOLARE_10') {
       taxAmount = effectiveGrossRent * 0.10;
