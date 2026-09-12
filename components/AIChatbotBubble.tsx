@@ -53,6 +53,23 @@ export const AIChatbotBubble: React.FC<AIChatbotBubbleProps> = ({
     scrollToBottom();
   }, [messages, isLoading]);
 
+  const handleSendRef = useRef<(text: string) => Promise<void>>(async () => {});
+
+  useEffect(() => {
+    handleSendRef.current = handleSend;
+  });
+
+  useEffect(() => {
+    const handler = (e: any) => {
+      setIsOpen(true);
+      if (e.detail?.prompt) {
+        handleSendRef.current(e.detail.prompt);
+      }
+    };
+    window.addEventListener('open-ai-chat', handler);
+    return () => window.removeEventListener('open-ai-chat', handler);
+  }, []);
+
   const handleSend = async (textToSend: string) => {
     if (!textToSend.trim() || isLoading) return;
 

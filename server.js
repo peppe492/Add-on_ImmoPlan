@@ -272,10 +272,204 @@ app.post('/api/ha/push_sensors', async (req, res) => {
       if (success) updatedCount++; else failedCount++;
     }
 
+    // --- PROJECTION / FORECAST SENSORS FOR ALL PROPERTIES ---
+    const props = dbData.properties || [];
+    for (const prop of props) {
+      const propIdSanitized = (prop.id || 'prop').toLowerCase().replace(/[^a-z0-9_]/g, '_');
+      const forecast = prop.forecastData || {};
+      const proj = forecast.yearlyProjections || [];
+      const y5 = proj[4] || proj[proj.length - 1] || {};
+      const y10 = proj[9] || proj[proj.length - 1] || {};
+
+      const val5a = y5.propertyValue || prop.currentValue || 0;
+      const rendNet5a = y5.annualNetRent || 0;
+      const eqNet5a = y5.accumulatedEquity || 0;
+      const diffEtf10a = (y10.accumulatedEquity || 0) + (y10.cumulativeNetCashFlow || 0) - (y10.etfWorldBenchmarkValue || 0);
+
+      // Push 4 standard forecast sensors per property
+      await updateHASensor(`${propIdSanitized}_valore_stimato_5a`, val5a, {
+        friendly_name: `${prop.name} - Valore Stimato (5 anni)`,
+        unit_of_measurement: '€',
+        icon: 'mdi:trending-up'
+      });
+      await updateHASensor(`${propIdSanitized}_rendimento_netto_proiettato`, rendNet5a, {
+        friendly_name: `${prop.name} - Rendimento Netto Proiettato (5a)`,
+        unit_of_measurement: '€/anno',
+        icon: 'mdi:cash-fast'
+      });
+      await updateHASensor(`${propIdSanitized}_equita_netta`, eqNet5a, {
+        friendly_name: `${prop.name} - Equità Netta (5a)`,
+        unit_of_measurement: '€',
+        icon: 'mdi:shield-home'
+      });
+      await updateHASensor(`${propIdSanitized}_diff_etf_world_10a`, diffEtf10a, {
+        friendly_name: `${prop.name} - Differenziale ETF World (10a)`,
+        unit_of_measurement: '€',
+        icon: 'mdi:chart-line-variant'
+      });
+
+      // Fire market alert webhook if cashflow is negative
+      if (y5.netCashFlow !== undefined && y5.netCashFlow < 0 && SUPERVISOR_TOKEN) {
+        await fetch(`http://supervisor/core/api/events/immoplan_market_alert`, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${SUPERVISOR_TOKEN}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            property_id: prop.id,
+            property_name: prop.name,
+            alert_type: 'NEGATIVE_CASHFLOW',
+            net_cash_flow_5y: y5.netCashFlow,
+            message: `Attenzione: l'immobile ${prop.name} presenta un cashflow netto proiettato negativo (${y5.netCashFlow}€/anno).`
+          })
+        }).catch(() => {});
+      }
+    }
+
     res.json({ success: true, updated: updatedCount, failed: failedCount });
 
   } catch (e) {
     console.error("Sensor Sync Error:", e);
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// --- ENDPOINT PREVISIONI BATCH ---
+app.post('/api/forecast/run-batch', (req, res) => {
+  if (!fs.existsSync(DB_FILE)) {
+    return res.status(404).json({ success: false, error: "Database non trovato" });
+  }
+
+  try {
+    const dbData = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
+    const properties = dbData.properties || [];
+
+    properties.forEach(prop => {
+      const initialVal = prop.currentValue || prop.purchasePrice || 200000;
+      const purchasePrice = prop.purchasePrice || initialVal;
+
+      let initialLoanAmount = 0;
+      let monthlyMortgagePayment = 0;
+      let durationYears = prop.financials?.mortgageDuration || 20;
+      let mortgageRate = prop.financials?.mortgageRate || 3.5;
+
+      if (prop.financials?.mortgageAmount && prop.financials.mortgageAmount > 0) {
+        if (prop.financials.mortgageAmount > 10000) {
+          initialLoanAmount = prop.financials.mortgageAmount;
+          const r = (mortgageRate > 0 ? mortgageRate : 3.5) / 12 / 100;
+          const n = durationYears * 12;
+          monthlyMortgagePayment = initialLoanAmount * (r * Math.pow(1 + r, n)) / (Math.pow(1 + r, n) - 1);
+        } else {
+          monthlyMortgagePayment = prop.financials.mortgageAmount;
+        }
+      } else if (prop.recurringCosts) {
+        const mortCost = prop.recurringCosts.find(c => c.category === 'MORTGAGE');
+        if (mortCost && mortCost.amount > 0) {
+          monthlyMortgagePayment = mortCost.frequency === 'MONTHLY' ? mortCost.amount : mortCost.amount / 12;
+        }
+      }
+
+      if (initialLoanAmount === 0 && monthlyMortgagePayment > 0) {
+        const r = (mortgageRate > 0 ? mortgageRate : 3.5) / 12 / 100;
+        const n = durationYears * 12;
+        initialLoanAmount = monthlyMortgagePayment * (1 - Math.pow(1 + r, -n)) / r;
+      }
+
+      const purchaseExpenses = purchasePrice * 0.08;
+      const initCash = prop.financials?.initialInvestment || Math.max(10000, purchasePrice + purchaseExpenses - initialLoanAmount);
+
+      const growth = 0.018 + 0.003;
+      const rentMonth = prop.financials?.monthlyRent || (initialVal * 0.05 / 12);
+      const baseGrossRent = rentMonth * 12;
+      const isGreen = prop.energyClass === 'A' || prop.energyClass === 'B';
+      const isRed = ['E', 'F', 'G'].includes(prop.energyClass || '');
+      const energyDelta = isGreen ? 0.015 : isRed ? -0.02 : 0;
+      const netRate = growth + energyDelta;
+
+      let annualOperatingExpenses = (prop.financials?.condoFees || 0) * 12;
+      if (prop.recurringCosts) {
+        prop.recurringCosts.forEach(c => {
+          if (c.category !== 'MORTGAGE') {
+            if (c.frequency === 'MONTHLY') annualOperatingExpenses += c.amount * 12;
+            else if (c.frequency === 'YEARLY' || c.frequency === 'ONE_OFF') annualOperatingExpenses += c.amount;
+          }
+        });
+      }
+
+      const taxRate = (prop.financials?.defaultTaxRate === 10) ? 0.10 : 0.21;
+
+      let cumulativeNetCashFlow = 0;
+      const yearlyProjections = [];
+
+      for (let y = 1; y <= 10; y++) {
+        const pVal = Math.round(initialVal * Math.pow(1 + netRate, y));
+        const grossRent = baseGrossRent * Math.pow(1.015, y - 1);
+        const effectiveRent = grossRent * (1 - 2/52);
+        const taxAmount = effectiveRent * taxRate;
+        const netRent = Math.max(0, effectiveRent - taxAmount - annualOperatingExpenses);
+        
+        let remainingDebt = 0;
+        if (initialLoanAmount > 0) {
+          const r = (mortgageRate > 0 ? mortgageRate : 3.5) / 12 / 100;
+          const n = durationYears * 12;
+          const k = Math.min(y * 12, n);
+          if (k < n) {
+            remainingDebt = initialLoanAmount * (Math.pow(1 + r, n) - Math.pow(1 + r, k)) / (Math.pow(1 + r, n) - 1);
+          }
+        }
+
+        const annualMortgagePayment = monthlyMortgagePayment > 0 ? monthlyMortgagePayment * 12 : 0;
+        const ncf = Math.round(netRent - annualMortgagePayment);
+        cumulativeNetCashFlow += ncf;
+        const eq = Math.max(0, pVal - Math.round(remainingDebt));
+        const etfVal = Math.round(initCash * Math.pow(1.07, y));
+
+        const netProfitGain = (eq - initCash) + cumulativeNetCashFlow;
+        const roe = Number(((netProfitGain / (initCash * y)) * 100).toFixed(2));
+
+        yearlyProjections.push({
+          year: y,
+          propertyValue: pVal,
+          optimisticValue: Math.round(pVal * Math.pow(1.02, y)),
+          pessimisticValue: Math.round(pVal * Math.pow(0.98, y)),
+          annualGrossRent: Math.round(grossRent),
+          annualNetRent: Math.round(netRent),
+          netCashFlow: ncf,
+          cumulativeNetCashFlow: Math.round(cumulativeNetCashFlow),
+          remainingMortgageDebt: Math.round(remainingDebt),
+          accumulatedEquity: eq,
+          etfWorldBenchmarkValue: etfVal,
+          roePercent: roe,
+          energyPenaltyBonus: Math.round(initialVal * energyDelta)
+        });
+      }
+
+      prop.forecastData = {
+        config: {
+          cpiInflationTarget: 2.0,
+          vacancyWeeksPerYear: 2,
+          bceInterestRateScenario: 'STABLE',
+          energyClassUpgrade: false,
+          currentEnergyClass: prop.energyClass || 'D',
+          enableEtfBenchmark: true,
+          etfAnnualReturn: 7.0,
+          taxRegime: prop.financials?.defaultTaxRate === 10 ? 'CEDOLARE_10' : 'CEDOLARE_21'
+        },
+        yearlyProjections,
+        metrics: {
+          zone: prop.address || prop.name,
+          avgPriceSqm: Math.round(initialVal / (prop.surfaceSqm || 70)),
+          avgRentSqmMonth: Math.round(rentMonth / (prop.surfaceSqm || 70) * 10) / 10,
+          annualGrowthTrend: 0.018,
+          demographicTrend: 0.003,
+          lastUpdated: new Date().toISOString().split('T')[0]
+        },
+        lastSimulatedAt: new Date().toISOString()
+      };
+    });
+
+    fs.writeFileSync(DB_FILE, JSON.stringify(dbData, null, 2), 'utf8');
+    res.json({ success: true, count: properties.length, timestamp: new Date().toISOString() });
+  } catch (e) {
+    console.error("Batch Forecast Error:", e);
     res.status(500).json({ success: false, error: e.message });
   }
 });

@@ -879,11 +879,11 @@ export const GlobalDashboard: React.FC<GlobalDashboardProps> = ({ portalTarget }
   const [anchor, setAnchor] = useState<Anchor>({ ...NOW });
   const [picker, setPicker] = useState(false);
   const [view, setView] = useState({ y: NOW.y, m: NOW.m });
-  const [isDesktop, setIsDesktop] = useState(window.innerWidth > 768);
+  const [isDesktop, setIsDesktop] = useState(typeof window !== 'undefined' ? window.innerWidth >= 1024 : true);
   const pickRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    const handleResize = () => setIsDesktop(window.innerWidth > 768);
+    const handleResize = () => setIsDesktop(window.innerWidth >= 1024);
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, []);
@@ -985,7 +985,7 @@ export const GlobalDashboard: React.FC<GlobalDashboardProps> = ({ portalTarget }
       <style>{IPB_DASH_CSS}</style>
       <div className="body">
         {isDesktop && portalContainer ? createPortal(
-          <div className={`ipb ${theme === 'NEON' ? '' : 'light'}`} style={{ background: 'transparent' }}>
+          <div className={`ipb ${theme === 'NEON' ? '' : 'light'}`} style={{ background: 'transparent', display: 'flex', alignItems: 'center', minWidth: 0, flexShrink: 1 }}>
             {ctrlsJSX}
           </div>,
           portalContainer
@@ -1196,6 +1196,17 @@ const IPB_DASH_CSS = `
 .ipb .datectl .dnav:hover{ color:var(--text); background:var(--panel); }
 .ipb .datectl .dlabel{ display:inline-flex; align-items:center; gap:8px; border:none; background:transparent; color:var(--text); font-family:var(--font); font-size:12.5px; font-weight:600; padding:5px 10px; border-radius:6px; cursor:pointer; white-space:nowrap; min-width:110px; justify-content:center; }
 .ipb .datectl .dlabel:hover{ background:var(--panel); } .ipb .datectl .dlabel .clc{ color:var(--accent); display:grid; }
+
+/* Stili per i controlli filtri quando montati nella top navbar */
+.ip-portal-area .ipb { display: flex; align-items: center; min-width: 0; flex-shrink: 1; }
+.ip-portal-area .ctrls { display: flex; align-items: center; gap: 6px; flex-wrap: nowrap; min-width: 0; flex-shrink: 1; }
+.ip-portal-area .selbox { min-width: 0; flex-shrink: 1; }
+.ip-portal-area .selbox select { max-width: 148px; font-size: 11.5px; font-weight: 600; padding: 5px 22px 5px 24px; background-position: right 6px center; border-radius: 8px; text-overflow: ellipsis; }
+.ip-portal-area .seg { padding: 2px; gap: 2px; border-radius: 8px; flex-shrink: 0; }
+.ip-portal-area .seg button { padding: 3.5px 7px; font-size: 10px; font-weight: 600; border-radius: 6px; }
+.ip-portal-area .datectl { padding: 2px; gap: 2px; border-radius: 8px; flex-shrink: 0; }
+.ip-portal-area .datectl .dnav { width: 22px; height: 22px; }
+.ip-portal-area .datectl .dlabel { font-size: 11.5px; font-weight: 600; padding: 3px 6px; min-width: 82px; gap: 4px; }
 
 @media (max-width: 1000px) {
   .ipb .selbox select {

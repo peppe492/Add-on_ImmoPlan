@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { Property, RecurringCost, RentalRecord, Tenant, Attachment, ValuationRecord } from '../types';
 import { db } from '../services/dbService';
 import { PieChart, Pie, Cell, ResponsiveContainer, LineChart, Line, XAxis, Tooltip, YAxis, CartesianGrid, Legend } from 'recharts';
+import { MarketForecaster } from './MarketForecaster';
 
 /* =====================================================================================
    ImmoPlan · Patrimonio — "Bento Terminal" design
@@ -11,7 +12,7 @@ import { PieChart, Pie, Cell, ResponsiveContainer, LineChart, Line, XAxis, Toolt
    Si aggancia al tema esistente: scuro col tema "Neon", chiaro altrimenti (classe .light).
    ===================================================================================== */
 
-type DetailTab = 'ANAGRAFICA' | 'ECONOMICA' | 'ANALISI';
+type DetailTab = 'ANAGRAFICA' | 'ECONOMICA' | 'ANALISI' | 'PREVISIONI';
 
 const CATEGORIES = [
   { id: 'MORTGAGE',    label: 'Mutuo/Prestito',     stroke: '#2f8fff' },
@@ -367,8 +368,10 @@ export const PropertyAssetManager: React.FC = () => {
           <div><div className="micro accent">Patrimonio · Editor</div><h2 className="ttl">{p.name}</h2></div>
         </div>
         <div className="seg">
-          {(['ANAGRAFICA', 'ECONOMICA', 'ANALISI'] as const).map(t => (
-            <button key={t} className={activeTab === t ? 'on' : ''} onClick={() => setActiveTab(t)}>{t}</button>
+          {(['ANAGRAFICA', 'ECONOMICA', 'ANALISI', 'PREVISIONI'] as const).map(t => (
+            <button key={t} className={activeTab === t ? 'on' : ''} onClick={() => setActiveTab(t)}>
+              {t === 'PREVISIONI' ? '📈 PREVISIONI' : t}
+            </button>
           ))}
         </div>
       </div>
@@ -407,6 +410,14 @@ export const PropertyAssetManager: React.FC = () => {
                   <div className="grid2">
                     <div className="moneybox"><div className="l">Prezzo Acquisto</div><div className="row"><span className="cur">€</span><input type="number" value={p.purchasePrice || ''} onChange={e => setSelectedProp({ ...p, purchasePrice: parseFloat(e.target.value) || 0 })} /></div></div>
                     <div className="moneybox"><div className="l">Valore Attuale</div><div className="row"><span className="cur">€</span><input type="number" value={p.currentValue || ''} onChange={e => setSelectedProp({ ...p, currentValue: parseFloat(e.target.value) || 0 })} /></div></div>
+                  </div>
+                  <div className="grid2" style={{ marginTop: '10px' }}>
+                    <div className="field"><label>Superficie (m²)</label><input className="input mono" type="number" value={p.surfaceSqm || ''} onChange={e => setSelectedProp({ ...p, surfaceSqm: parseFloat(e.target.value) || undefined })} placeholder="70" /></div>
+                    <div className="field"><label>Classe Energetica</label>
+                      <select className="input" value={p.energyClass || 'D'} onChange={e => setSelectedProp({ ...p, energyClass: e.target.value as any })}>
+                        <option value="A">Classe A</option><option value="B">Classe B</option><option value="C">Classe C</option><option value="D">Classe D</option><option value="E">Classe E</option><option value="F">Classe F</option><option value="G">Classe G</option>
+                      </select>
+                    </div>
                   </div>
                 </div>
                 <div>
@@ -668,6 +679,16 @@ export const PropertyAssetManager: React.FC = () => {
             </div>
           </div>
         </div>
+      )}
+
+      {activeTab === 'PREVISIONI' && (
+        <MarketForecaster
+          property={p}
+          onSaveForecast={(updatedProp) => {
+            setSelectedProp(updatedProp);
+            savePropertyToDB(updatedProp);
+          }}
+        />
       )}
     </div>
   );

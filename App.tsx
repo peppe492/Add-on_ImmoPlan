@@ -11,6 +11,7 @@ import { AdminPanel } from './components/AdminPanel';
 import { Sidebar } from './components/Sidebar';
 import { CalendarManager } from './components/CalendarManager';
 import { InvoiceTaxArchive } from './components/InvoiceTaxArchive';
+import { HelpCenter } from './components/HelpCenter';
 import { FinancialData, MainTab, PurchaseTab, PropertyTab, Scenario, SystemLog } from './types';
 import { db } from './services/dbService';
 
@@ -338,6 +339,9 @@ const App: React.FC = () => {
             onRefreshData={refreshUIFromDB}
             onUpdateScenarios={setScenarios}
           />
+        )}
+        {activeMainTab === MainTab.HELP && (
+          <HelpCenter theme={data.theme} />
         )}
       </main>
       <AIChatbotBubble

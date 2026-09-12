@@ -139,15 +139,70 @@ export interface Landlord {
   phone?: string;
   iban?: string;
   taxCode?: string;
+  marginalTaxRate?: number;
   notes?: string;
   attachments?: Attachment[];
   createdAt: string;
+}
+
+export interface OwnerProfileSettings {
+  id: string;
+  name: string;
+  marginalTaxRate?: number;
 }
 
 export interface ValuationRecord {
   id: string;
   date: string; // YYYY-MM-DD
   value: number;
+}
+
+export interface MicroMarketMetrics {
+  zone: string;
+  cap?: string;
+  avgPriceSqm: number;
+  avgRentSqmMonth: number;
+  annualGrowthTrend: number; // e.g. 0.02 for +2%
+  demographicTrend: number;  // e.g. 0.005 for +0.5%
+  historicalIpabIndex?: number[];
+  historicalFoiIndex?: number[];
+  lastUpdated: string;
+}
+
+export interface ForecastSimulationConfig {
+  cpiInflationTarget: number; // % (e.g. 2.0)
+  vacancyWeeksPerYear: number; // (e.g. 2)
+  bceInterestRateScenario: 'STABLE' | 'RISING' | 'FALLING';
+  energyClassUpgrade: boolean; // toggle
+  currentEnergyClass?: 'A' | 'B' | 'C' | 'D' | 'E' | 'F' | 'G';
+  targetEnergyClass?: 'A' | 'B' | 'C' | 'D' | 'E' | 'F' | 'G';
+  enableEtfBenchmark: boolean; // toggle
+  etfAnnualReturn?: number; // % (e.g. 7.0 for ETF World)
+  taxRegime: 'CEDOLARE_21' | 'CEDOLARE_10' | 'IRPEF_ORDINARIA';
+  ownerMarginalTaxRate?: number; // % (e.g. 35 or 43)
+}
+
+export interface YearlyForecastResult {
+  year: number;
+  propertyValue: number;
+  optimisticValue: number;
+  pessimisticValue: number;
+  annualGrossRent: number;
+  annualNetRent: number;
+  netCashFlow: number;
+  cumulativeNetCashFlow: number;
+  remainingMortgageDebt: number;
+  accumulatedEquity: number;
+  etfWorldBenchmarkValue: number;
+  roePercent: number;
+  energyPenaltyBonus: number;
+}
+
+export interface PropertyForecastData {
+  config: ForecastSimulationConfig;
+  yearlyProjections: YearlyForecastResult[];
+  metrics: MicroMarketMetrics;
+  lastSimulatedAt: string;
 }
 
 export interface Property {
@@ -159,6 +214,8 @@ export interface Property {
   purchasePrice: number;
   currentValue: number;
   status: 'RENTED' | 'EMPTY' | 'RENOVATION' | 'MAIN_RESIDENCE';
+  energyClass?: 'A' | 'B' | 'C' | 'D' | 'E' | 'F' | 'G';
+  surfaceSqm?: number;
   notes?: string;
   coordinates?: { lat: number; lng: number; };
   financials?: {
@@ -176,6 +233,7 @@ export interface Property {
   currentTenantId?: string; 
   documents?: Attachment[];
   valuations?: ValuationRecord[];
+  forecastData?: PropertyForecastData;
 }
 
 export interface RecurringCost {
@@ -209,7 +267,44 @@ export enum MainTab {
   CALENDAR = 'CALENDAR',
   ADVISOR = 'ADVISOR',
   VISUALIZER = 'VISUALIZER',
-  ADMIN = 'ADMIN'
+  ADMIN = 'ADMIN',
+  HELP = 'HELP'
+}
+
+export type HelpCategory =
+  | 'GETTING_STARTED'
+  | 'FORECASTER'
+  | 'PROPERTY_MGMT'
+  | 'TAXES_BONUS'
+  | 'HOME_ASSISTANT'
+  | 'FAQ_TROUBLESHOOTING';
+
+export interface HelpArticle {
+  id: string;
+  title: string;
+  category: HelpCategory;
+  summary: string;
+  content: string;
+  tags: string[];
+  readTimeMinutes?: number;
+  featured?: boolean;
+  relatedArticleIds?: string[];
+}
+
+export interface FaqItem {
+  id: string;
+  question: string;
+  answer: string;
+  category: HelpCategory;
+  tags?: string[];
+}
+
+export interface HelpCategoryInfo {
+  id: HelpCategory;
+  label: string;
+  icon: string;
+  description: string;
+  badgeColor: string;
 }
 
 export enum PurchaseTab { 

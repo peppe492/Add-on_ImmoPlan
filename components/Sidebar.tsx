@@ -48,11 +48,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
   };
 
   const menuItems = [
-    { id: MainTab.DASHBOARD, label: 'Dashboard' },
-    { id: MainTab.PURCHASE, label: 'Acquisto' },
-    { id: MainTab.PROPERTY_MGMT, label: 'Patrimonio' },
-    { id: MainTab.CALENDAR, label: 'Scadenze' },
-    { id: MainTab.ADMIN, label: 'Admin' },
+    { id: MainTab.DASHBOARD, label: 'Dashboard', mobileLabel: 'Dash', icon: '📊' },
+    { id: MainTab.PURCHASE, label: 'Acquisto', mobileLabel: 'Acquisto', icon: '💰' },
+    { id: MainTab.PROPERTY_MGMT, label: 'Patrimonio', mobileLabel: 'Asset', icon: '🏢' },
+    { id: MainTab.CALENDAR, label: 'Scadenze', mobileLabel: 'Scadenze', icon: '📅' },
+    { id: MainTab.ADMIN, label: 'Admin', mobileLabel: 'Admin', icon: '⚙️' },
   ];
 
   const handleGlobalExport = async () => {
@@ -169,8 +169,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 key={item.id}
                 onClick={() => onTabChange(item.id)}
                 className={`ip-nav-btn ${activeTab === item.id ? 'active' : ''}`}
+                title={item.label}
               >
-                {item.label}
+                {item.icon ? (
+                  <span className="inline-flex items-center gap-1.5">
+                    <span>{item.icon}</span>
+                    <span className="tab-text">{item.label}</span>
+                  </span>
+                ) : (
+                  <span className="tab-text">{item.label}</span>
+                )}
               </button>
             ))}
           </nav>
@@ -178,8 +186,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
           {/* Portal container for page-specific filters (e.g. GlobalDashboard) */}
           <div id="header-filters-portal" ref={portalRef} className="ip-portal-area"></div>
 
-          {/* Action Buttons: Notification, Sun (Theme Switch), Export/Import */}
+          {/* Action Buttons: Help, Notification, Sun (Theme Switch), Export/Import */}
           <div className="ip-actions-row">
+            <button
+              className={`ip-circle-btn ${activeTab === MainTab.HELP ? 'active ring-2 ring-brand-500' : ''}`}
+              onClick={() => onTabChange(MainTab.HELP)}
+              title="Guida & Manuali"
+            >
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg>
+            </button>
             <button className="ip-circle-btn" title="Notifiche">
               <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>
             </button>
@@ -211,7 +226,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 activeTab === item.id ? 'text-blue-500 dark:text-cyan-400 font-extrabold scale-105' : 'text-slate-400 font-medium'
               }`}
             >
-               <span className="text-[10px] uppercase tracking-wider font-bold">{item.label}</span>
+               {item.icon && <span className="text-xs">{item.icon}</span>}
+               <span className="text-[9px] uppercase tracking-wider font-bold">{item.mobileLabel || item.label}</span>
             </button>
          ))}
       </div>
@@ -275,33 +291,36 @@ const HEADER_CSS = `
   --panel-2: #151d2d;
   background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: 14px;
-  padding: 12px 0px;
-  margin: 16px 40px 8px 40px;
-  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.3);
+  border-radius: 16px;
+  padding: 12px 20px;
+  margin: 10px 14px 6px 14px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.20);
   font-family: 'Geist', 'DM Sans', sans-serif;
   box-sizing: border-box;
+  transition: all 0.2s ease-in-out;
 }
 
 .ip-header-container.light {
   --bg: #ffffff;
-  --border: rgba(15, 23, 42, 0.09);
+  --border: rgba(15, 23, 42, 0.08);
   --text: #0c1424;
   --dim: #5a6679;
   --accent: #0a6cff;
   --accent-soft: rgba(10, 108, 255, 0.10);
   --panel-2: #f1f4f9;
-  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
+  box-shadow: 0 6px 24px rgba(15, 23, 42, 0.06);
 }
 
 .ip-header {
   display: flex;
   align-items: center;
-  justify-content: flex-start;
-  gap: 20px;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
   max-width: 100%;
   margin: 0;
   flex-wrap: nowrap;
+  min-height: 40px;
 }
 
 .ip-logo-group {
@@ -309,7 +328,6 @@ const HEADER_CSS = `
   align-items: center;
   gap: 8px;
   flex-shrink: 0;
-  padding-left: 16px;
 }
 
 .ip-logo {
@@ -322,7 +340,7 @@ const HEADER_CSS = `
   justify-content: center;
   color: #fff;
   font-weight: 800;
-  font-size: 15px;
+  font-size: 14.5px;
   box-shadow: 0 4px 12px rgba(47, 143, 255, 0.3);
   flex-shrink: 0;
 }
@@ -331,24 +349,58 @@ const HEADER_CSS = `
   display: none;
 }
 
-.ip-actions-row {
+.ip-nav {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-left: auto;
-  padding-right: 16px;
+  gap: 6px;
   flex-shrink: 0;
+}
+
+.ip-nav-btn {
+  border: 1px solid transparent;
+  background: transparent;
+  cursor: pointer;
+  font-family: 'Geist', sans-serif;
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--dim);
+  padding: 6px 11px;
+  border-radius: 9px;
+  transition: all 0.15s ease-in-out;
+  white-space: nowrap;
+}
+
+.ip-nav-btn:hover {
+  color: var(--text);
+  background: rgba(150, 150, 150, 0.06);
+}
+
+.ip-nav-btn.active {
+  background: var(--panel-2);
+  border-color: var(--border);
+  color: var(--text);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.05);
 }
 
 .ip-portal-area {
   display: flex;
   align-items: center;
-  gap: 10px;
-  margin-left: 8px;
+  gap: 8px;
+  margin-left: clamp(8px, 1.5vw, 24px);
+  flex-shrink: 1;
+  min-width: 0;
+}
+
+.ip-actions-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
   flex-shrink: 0;
 }
 
 .ip-circle-btn {
+  position: relative;
   width: 32px;
   height: 32px;
   border-radius: 50%;
@@ -371,95 +423,59 @@ const HEADER_CSS = `
   transform: translateY(-1px);
 }
 
-.ip-nav {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  flex-shrink: 0;
+.ip-circle-btn.active {
+  color: #fff;
+  background: var(--accent);
+  border-color: var(--accent);
+  box-shadow: 0 0 10px var(--accent-soft);
 }
 
-.ip-nav-btn {
-  border: 1px solid transparent;
-  background: transparent;
-  cursor: pointer;
-  font-family: 'Geist', sans-serif;
-  font-weight: 600;
-  font-size: 14.5px;
-  color: var(--dim);
-  padding: 8px 16px;
-  border-radius: 10px;
-  transition: all 0.15s ease-in-out;
-  white-space: nowrap;
-}
-
-.ip-nav-btn:hover {
-  color: var(--text);
-}
-
-.ip-nav-btn.active {
-  background: var(--panel-2);
-  border-color: var(--border);
-  color: var(--text);
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+@media (max-width: 1350px) {
+  .ip-nav-btn {
+    padding: 5px 8px;
+    font-size: 12.5px;
+  }
+  .ip-nav {
+    gap: 4px;
+  }
+  .ip-header {
+    gap: 8px;
+  }
+  .ip-portal-area {
+    margin-left: 8px;
+    gap: 6px;
+  }
 }
 
 @media (max-width: 1150px) {
-  .ip-header-container {
-    margin: 16px 24px 0 24px;
-    padding: 10px 0px;
+  .ip-nav-btn span.tab-text {
+    display: none;
   }
-  .ip-header {
-    gap: 12px;
+  .ip-nav-btn.active span.tab-text {
+    display: inline;
   }
   .ip-nav-btn {
-    padding: 6px 12px;
-    font-size: 13.5px;
-  }
-  .ip-logo {
-    width: 34px;
-    height: 34px;
-    font-size: 13.5px;
-    border-radius: 9px;
-  }
-  .ip-portal-area {
-    gap: 6px;
-    margin-left: 4px;
-  }
-  .ip-actions-row {
-    padding-right: 12px;
-    gap: 6px;
-  }
-  .ip-logo-group {
-    padding-left: 12px;
-  }
-  .ip-circle-btn {
-    width: 28px;
-    height: 28px;
+    padding: 5px 8px;
   }
 }
 
 @media (max-width: 950px) {
   .ip-header-container {
-    margin: 12px 16px 0 16px;
-    padding: 8px 0px;
+    margin: 8px 10px 4px 10px;
+    padding: 8px 12px;
   }
   .ip-header {
-    gap: 8px;
+    gap: 6px;
   }
-  .ip-nav-btn {
-    padding: 5px 8px;
+  .ip-logo {
+    width: 32px;
+    height: 32px;
     font-size: 12px;
+    border-radius: 8px;
   }
-  .ip-portal-area {
-    gap: 4px;
-    margin-left: 0;
-  }
-  .ip-logo-group {
-    padding-left: 8px;
-  }
-  .ip-actions-row {
-    padding-right: 8px;
-    gap: 4px;
+  .ip-circle-btn {
+    width: 28px;
+    height: 28px;
   }
 }
 
