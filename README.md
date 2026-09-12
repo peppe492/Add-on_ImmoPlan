@@ -1,10 +1,34 @@
 # 🏠 MM's PROPERTY - Real Estate Management AI
 
-**MM's PROPERTY** (v1.4.0) è una piattaforma *all-in-one* ibrida per la gestione avanzata di investimenti immobiliari, ristrutturazioni, locazioni e detrazioni fiscali. Progettata per investitori e property manager, combina strumenti finanziari rigorosi con la potenza dell'Intelligenza Artificiale Generativa (Google Gemini) per offrire analisi strategiche, visualizzazione di design e automazione.
+**MM's PROPERTY** (v1.5.0) è una piattaforma *all-in-one* ibrida per la gestione avanzata di investimenti immobiliari, ristrutturazioni, locazioni, detrazioni fiscali e proiezioni previsionali di mercato. Progettata per investitori e property manager, combina modelli matematico-finanziari rigorosi con la potenza dell'Intelligenza Artificiale Generativa (Google Gemini) e l'integrazione IoT con Home Assistant.
 
-L'applicazione è **cross-platform**: funziona sia come applicazione Desktop nativa (Windows) che come Add-on integrato in Home Assistant.
+L'applicazione è **cross-platform**: funziona sia come applicazione Desktop nativa che come Add-on integrato in Home Assistant.
 
 ![Dashboard Preview](./dashboard.png)
+
+---
+
+## 🚀 Novità Versione 1.5.0
+
+*   📈 **Motore Previsionale Dinamico a 10 Anni (MarketForecaster):**
+    *   **Proiezioni Finanziarie Multi-Anno (1, 3, 5, 10 Anni):** Simulazione previsionale interattiva per ogni singolo immobile con curve comparative: Valore Immobile rivalutato, Debito Mutuo Residuo, Equità Netta accumulata e Flussi di Cassa netti.
+    *   **Integrazione Open Data Nazionali & Fallback AI:** Integrazione dati ISTAT SDMX (indice inflazione FOI/IPCA e prezzi abitazioni IPAB) e quotazioni OMI dell'Agenzia delle Entrate per zona/CAP, con fallback predittivo tramite Gemini 2.5 Flash Grounding.
+    *   **Direttiva Europea "Case Verdi" (EPBD):** Modulazione del deprezzamento/apprezzamento in base alla classe energetica (-2.0% annuo per classi E, F, G; +1.5% annuo per classi virtuose A e B).
+    *   **Piano di Ammortamento Francese:** Ricalcolo mensile dinamico della quota capitale vs quota interessi del mutuo e accumulo dell'equità netta.
+    *   **Benchmark Finanziario ETF World:** Comparazione opzionale con rendimento composto (6-8% annuo) applicato al capitale liquido proprio effettivamente investito (*Acquisto + Spese + Ristrutturazione - Mutuo*).
+    *   **Sensori Home Assistant Dedicati:** Esposizione automatica delle metriche di previsione (`sensor.immoplan_<id>_valore_stimato_5a`, `sensor.immoplan_<id>_rendimento_netto_proiettato`, `sensor.immoplan_<id>_equita_netta`, `sensor.immoplan_<id>_diff_etf_world_10a`).
+
+*   📚 **Centro Guide & Manuali Integrato nell'App (HelpCenter):**
+    *   **Documentazione Completa In-App:** Accessibile direttamente dall'icona circolare `(?)` nella barra superiore su tutte le pagine dell'applicazione.
+    *   **Ricerca Istantanea (`Cmd + K`):** Indicizzazione in tempo reale di tutti gli articoli, guide operative e risposte alle domande frequenti.
+    *   **6 Categorie Guida Approfondite:** *Primi Passi & Panoramica*, *Motore Previsionale & Trend 10 Anni*, *Gestione Immobili, Contratti & Affitti*, *Fisco, Cedolare Secca & Detrazioni (Bonus 50%/65%)*, *Home Assistant & Webhook*, *FAQ & Risoluzione Problemi*.
+    *   **3 Calcolatori Finanziari Interattivi:** Mini-tool integrati per simulare al volo il *Rendimento ROE sull'Equità Netta*, la *Rata del Mutuo alla Francese* e l'*Impatto Direttiva Case Verdi UE*.
+    *   **Sezione FAQ a Fisarmonica:** Risposte immediate ai dubbi più frequenti su backup, privacy dei dati, formule di calcolo e automazioni Home Assistant.
+
+*   🎨 **Navbar & Top Bar Responsive Riprogettata:**
+    *   **5 Schede Principali con Icone:** 📊 *Dashboard*, 💰 *Acquisto*, 🏢 *Patrimonio*, 📅 *Scadenze*, ⚙️ *Admin*.
+    *   **Adattamento Intelligente per Schermi Compatti:** Gestione dinamica dello spazio per i filtri del portafoglio; sui display più stretti le schede comprimono il testo mantenendo le icone emoji.
+    *   **Area Azioni Sempre Visibile:** Icona dei Manuali `(?)`, Notifiche, Tema chiaro/scuro e Backup/Ripristino garantiti al 100% senza tagli laterali o overflow.
 
 ---
 
