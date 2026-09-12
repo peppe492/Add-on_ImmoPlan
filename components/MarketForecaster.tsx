@@ -58,7 +58,7 @@ export const MarketForecaster: React.FC<MarketForecasterProps> = ({ property, on
     };
     loadMarketData();
     return () => { isMounted = false; };
-  }, [property]);
+  }, [property.id, property.address, property.coordinates?.lat, property.coordinates?.lng, property.forecastData?.metrics]);
 
   const forecastData: PropertyForecastData = useMemo(() => {
     return calculatePropertyForecast(property, config, metrics || undefined);

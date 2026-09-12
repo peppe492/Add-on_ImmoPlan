@@ -42,9 +42,21 @@ const calculateRemainingMortgageDebt = (
     return { remainingDebt: 0, monthlyInstallment: 0 };
   }
 
-  const r = (annualRatePct > 0 ? annualRatePct : 3.5) / 12 / 100; // Monthly interest rate
   const n = durationYears * 12; // Total months
   const k = Math.min(yearsElapsed * 12, n); // Months elapsed
+
+  // Handle 0% interest rate loan (e.g. subsidized loan / tasso zero)
+  if (annualRatePct === 0) {
+    const monthlyInstallment = initialLoanAmount / n;
+    const remainingDebt = Math.max(0, initialLoanAmount * (1 - k / n));
+    return {
+      remainingDebt: Math.round(remainingDebt),
+      monthlyInstallment: Math.round(monthlyInstallment)
+    };
+  }
+
+  const effectiveRate = annualRatePct > 0 ? annualRatePct : 3.5;
+  const r = effectiveRate / 12 / 100; // Monthly interest rate
 
   // PMT formula: P * (r * (1+r)^n) / ((1+r)^n - 1)
   const monthlyInstallment = initialLoanAmount * (r * Math.pow(1 + r, n)) / (Math.pow(1 + r, n) - 1);
@@ -197,7 +209,8 @@ export const calculatePropertyForecast = (
       taxAmount = effectiveGrossRent * 0.95 * marginalRate; // 5% flat deduction for IRPEF
     }
 
-    const annualNetRent = Math.max(0, effectiveGrossRent - taxAmount - annualOperatingExpenses);
+    // Net operating rent (allows negative values when vacancy or operating expenses exceed rent)
+    const annualNetRent = effectiveGrossRent - taxAmount - annualOperatingExpenses;
 
     // Mortgage Amortization & Debt
     const { remainingDebt, monthlyInstallment } = calculateRemainingMortgageDebt(
@@ -217,9 +230,11 @@ export const calculatePropertyForecast = (
     const etfAnnualReturnRate = (config.etfAnnualReturn || 7.0) / 100;
     const etfWorldBenchmarkValue = Math.round(initialCashEquity * Math.pow(1 + etfAnnualReturnRate, year));
 
-    // ROE (Return on Investment % on Cash Equity)
+    // ROE (Return on Investment % on Cash Equity) - protected against zero/negative equity
     const netProfitGain = (accumulatedEquity - initialCashEquity) + cumulativeNetCashFlow;
-    const roePercent = Number(((netProfitGain / (initialCashEquity * year)) * 100).toFixed(2));
+    const roePercent = initialCashEquity > 0
+      ? Number(((netProfitGain / (initialCashEquity * year)) * 100).toFixed(2))
+      : 0;
 
     yearlyProjections.push({
       year,
