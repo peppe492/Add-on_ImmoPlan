@@ -1,8 +1,27 @@
 
-import { FinancialData, Scenario, RentalRecord, Tenant, Landlord, Property, SystemLog, Deadline, InvoiceRecord } from '../types';
+import { FinancialData, Scenario, RentalRecord, Tenant, Landlord, Property, SystemLog, Deadline, InvoiceRecord, RentReceipt, NotificationSettings, NotificationLog } from '../types';
 
 const DB_NAME = 'ImmoPlanDB';
-const DB_VERSION = 5; // Bump version for invoices store
+const DB_VERSION = 6; // Bump version for receipts, notificationSettings, notificationLogs stores
+
+export const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettings = {
+  reminderAdvanceDays: 5,
+  autoCheckEnabled: true,
+  homeAssistant: {
+    enabled: false,
+    updateSensors: true,
+    persistentNotifications: true,
+    sensorEntityId: 'sensor.immoplan_affitti_stato'
+  },
+  telegram: {
+    enabled: false,
+    botToken: '',
+    ownerChatId: '',
+    notifyOwnerOnDue: true,
+    notifyTenantOnDue: false,
+    autoSendReceiptToTenant: false
+  }
+};
 
 export class ImmoPlanDB {
   private db: IDBDatabase | null = null;
@@ -51,21 +70,47 @@ export class ImmoPlanDB {
       const request = indexedDB.open(DB_NAME, DB_VERSION);
       request.onupgradeneeded = (event) => {
         const db = (event.target as IDBOpenDBRequest).result;
-        const stores = ['config', 'scenarios', 'rentalRecords', 'tenants', 'landlords', 'properties', 'systemLogs', 'deadlines', 'invoices'];
+        const tx = (event.target as IDBOpenDBRequest).transaction!;
+        const stores = [
+          'config', 'scenarios', 'rentalRecords', 'tenants', 'landlords', 
+          'properties', 'systemLogs', 'deadlines', 'invoices',
+          'receipts', 'notificationSettings', 'notificationLogs'
+        ];
         stores.forEach(s => {
           if (!db.objectStoreNames.contains(s)) {
-            const store = db.createObjectStore(s, s === 'config' ? undefined : { keyPath: 'id' });
+            const isConfigLike = (s === 'config' || s === 'notificationSettings');
+            const store = db.createObjectStore(s, isConfigLike ? undefined : { keyPath: 'id' });
             if (s === 'invoices') {
               store.createIndex('propertyId', 'propertyId', { unique: false });
               store.createIndex('fiscalYear', 'fiscalYear', { unique: false });
-            }
-          } else if (s === 'invoices') {
-            const store = (request.transaction as IDBTransaction).objectStore('invoices');
-            if (!store.indexNames.contains('propertyId')) {
+            } else if (s === 'receipts') {
               store.createIndex('propertyId', 'propertyId', { unique: false });
-            }
-            if (!store.indexNames.contains('fiscalYear')) {
+              store.createIndex('tenantId', 'tenantId', { unique: false });
               store.createIndex('fiscalYear', 'fiscalYear', { unique: false });
+              store.createIndex('receiptNumber', 'receiptNumber', { unique: false });
+              store.createIndex('paymentRecordId', 'paymentRecordId', { unique: false });
+            } else if (s === 'notificationLogs') {
+              store.createIndex('timestamp', 'timestamp', { unique: false });
+              store.createIndex('channel', 'channel', { unique: false });
+              store.createIndex('propertyId', 'propertyId', { unique: false });
+              store.createIndex('type', 'type', { unique: false });
+            }
+          } else {
+            const store = tx.objectStore(s);
+            if (s === 'invoices') {
+              if (!store.indexNames.contains('propertyId')) store.createIndex('propertyId', 'propertyId', { unique: false });
+              if (!store.indexNames.contains('fiscalYear')) store.createIndex('fiscalYear', 'fiscalYear', { unique: false });
+            } else if (s === 'receipts') {
+              if (!store.indexNames.contains('propertyId')) store.createIndex('propertyId', 'propertyId', { unique: false });
+              if (!store.indexNames.contains('tenantId')) store.createIndex('tenantId', 'tenantId', { unique: false });
+              if (!store.indexNames.contains('fiscalYear')) store.createIndex('fiscalYear', 'fiscalYear', { unique: false });
+              if (!store.indexNames.contains('receiptNumber')) store.createIndex('receiptNumber', 'receiptNumber', { unique: false });
+              if (!store.indexNames.contains('paymentRecordId')) store.createIndex('paymentRecordId', 'paymentRecordId', { unique: false });
+            } else if (s === 'notificationLogs') {
+              if (!store.indexNames.contains('timestamp')) store.createIndex('timestamp', 'timestamp', { unique: false });
+              if (!store.indexNames.contains('channel')) store.createIndex('channel', 'channel', { unique: false });
+              if (!store.indexNames.contains('propertyId')) store.createIndex('propertyId', 'propertyId', { unique: false });
+              if (!store.indexNames.contains('type')) store.createIndex('type', 'type', { unique: false });
             }
           }
         });
@@ -93,7 +138,10 @@ export class ImmoPlanDB {
       const data = await response.json();
       if (!data || Object.keys(data).length === 0) return false;
 
-      const storeNames = ['config', 'scenarios', 'rentalRecords', 'tenants', 'landlords', 'properties', 'deadlines', 'invoices'];
+      const storeNames = [
+        'config', 'scenarios', 'rentalRecords', 'tenants', 'landlords', 
+        'properties', 'deadlines', 'invoices', 'receipts', 'notificationSettings', 'notificationLogs'
+      ];
       const tx = this.db.transaction(storeNames, 'readwrite');
       
       const replaceStore = (storeName: string, items: any) => {
@@ -102,7 +150,7 @@ export class ImmoPlanDB {
         if (Array.isArray(items)) {
           items.forEach(item => store.put(item));
         } else if (items) {
-          store.put(items, 'current_state');
+          store.put(items, (storeName === 'config' || storeName === 'notificationSettings') ? 'current_state' : undefined);
         }
       };
 
@@ -114,6 +162,9 @@ export class ImmoPlanDB {
       if (data.properties) replaceStore('properties', data.properties);
       if (data.deadlines) replaceStore('deadlines', data.deadlines);
       if (data.invoices) replaceStore('invoices', data.invoices);
+      if (data.receipts) replaceStore('receipts', data.receipts);
+      if (data.notificationSettings) replaceStore('notificationSettings', data.notificationSettings);
+      if (data.notificationLogs) replaceStore('notificationLogs', data.notificationLogs);
 
       return new Promise((resolve) => {
         tx.oncomplete = () => resolve(true);
@@ -137,7 +188,10 @@ export class ImmoPlanDB {
   private async pushToServer(): Promise<void> {
     if (!this.db) return;
     try {
-      const [config, scenarios, rentalRecords, tenants, landlords, properties, deadlines, invoices] = await Promise.all([
+      const [
+        config, scenarios, rentalRecords, tenants, landlords, 
+        properties, deadlines, invoices, receipts, notificationSettings, notificationLogs
+      ] = await Promise.all([
         this.getAppData(),
         this.getScenarios(),
         this.getRentalRecords(),
@@ -145,10 +199,16 @@ export class ImmoPlanDB {
         this.getLandlords(),
         this.getProperties(),
         this.getDeadlines(),
-        this.getInvoices()
+        this.getInvoices(),
+        this.getReceipts(),
+        this.getNotificationSettings(),
+        this.getNotificationLogs()
       ]);
 
-      const fullDump = { config, scenarios, rentalRecords, tenants, landlords, properties, deadlines, invoices };
+      const fullDump = {
+        config, scenarios, rentalRecords, tenants, landlords, 
+        properties, deadlines, invoices, receipts, notificationSettings, notificationLogs
+      };
 
       await fetch('./api/sync', {
         method: 'POST',
@@ -409,9 +469,147 @@ export class ImmoPlanDB {
   async getInvoices(): Promise<InvoiceRecord[]> { return this.getAll<InvoiceRecord>('invoices'); }
   async getLogs(): Promise<SystemLog[]> { return this.getAll<SystemLog>('systemLogs'); }
 
+  // --- RENT RECEIPTS (QUIETANZE FISCALI) ---
+  async saveReceipt(receipt: RentReceipt): Promise<void> {
+    await this.put('receipts', receipt);
+    this.log(`Quietanza ${receipt.formattedNumber || receipt.id} salvata con successo`, 'success');
+    await this.pushToServer();
+  }
+
+  async saveRentReceipt(receipt: RentReceipt): Promise<void> {
+    return this.saveReceipt(receipt);
+  }
+
+  async getReceipts(): Promise<RentReceipt[]> {
+    const receipts = await this.getAll<RentReceipt>('receipts');
+    return receipts.sort((a, b) => new Date(b.issueDate).getTime() - new Date(a.issueDate).getTime());
+  }
+
+  async getRentReceipts(): Promise<RentReceipt[]> {
+    return this.getReceipts();
+  }
+
+  async getReceipt(id: string): Promise<RentReceipt | null> {
+    return this.get<RentReceipt>('receipts', id);
+  }
+
+  async getRentReceipt(id: string): Promise<RentReceipt | null> {
+    return this.getReceipt(id);
+  }
+
+  async getReceiptByPaymentRecordId(paymentRecordId: string): Promise<RentReceipt | null> {
+    if (!this.db) await this.init();
+    try {
+      return await new Promise<RentReceipt | null>((resolve) => {
+        const tx = this.db!.transaction('receipts', 'readonly');
+        const index = tx.objectStore('receipts').index('paymentRecordId');
+        const req = index.get(paymentRecordId);
+        req.onsuccess = () => resolve(req.result || null);
+        req.onerror = () => resolve(null);
+      });
+    } catch (e) {
+      const all = await this.getReceipts();
+      return all.find(r => r.paymentRecordId === paymentRecordId) || null;
+    }
+  }
+
+  async getReceiptsByProperty(propertyId: string): Promise<RentReceipt[]> {
+    if (!this.db) await this.init();
+    try {
+      return await new Promise<RentReceipt[]>((resolve) => {
+        const tx = this.db!.transaction('receipts', 'readonly');
+        const index = tx.objectStore('receipts').index('propertyId');
+        const req = index.getAll(propertyId);
+        req.onsuccess = () => resolve(req.result || []);
+        req.onerror = () => resolve([]);
+      });
+    } catch (e) {
+      const all = await this.getReceipts();
+      return all.filter(r => r.propertyId === propertyId);
+    }
+  }
+
+  async getReceiptsByFiscalYear(fiscalYear: number): Promise<RentReceipt[]> {
+    if (!this.db) await this.init();
+    try {
+      return await new Promise<RentReceipt[]>((resolve) => {
+        const tx = this.db!.transaction('receipts', 'readonly');
+        const index = tx.objectStore('receipts').index('fiscalYear');
+        const req = index.getAll(fiscalYear);
+        req.onsuccess = () => resolve(req.result || []);
+        req.onerror = () => resolve([]);
+      });
+    } catch (e) {
+      const all = await this.getReceipts();
+      return all.filter(r => Number(r.fiscalYear) === fiscalYear);
+    }
+  }
+
+  async getNextReceiptNumber(fiscalYear: number): Promise<number> {
+    const receipts = await this.getReceiptsByFiscalYear(fiscalYear);
+    if (!receipts || receipts.length === 0) return 1;
+    const max = receipts.reduce((m, r) => Math.max(m, Number(r.receiptNumber) || 0), 0);
+    return max + 1;
+  }
+
+  async deleteReceipt(id: string): Promise<void> {
+    await this.delete('receipts', id);
+    this.log(`Quietanza eliminata: ${id}`, 'success');
+    await this.pushToServer();
+  }
+
+  async deleteRentReceipt(id: string): Promise<void> {
+    return this.deleteReceipt(id);
+  }
+
+  // --- NOTIFICATION SETTINGS ---
+  async getNotificationSettings(): Promise<NotificationSettings> {
+    const saved = await this.get<NotificationSettings>('notificationSettings', 'current_state');
+    if (!saved) return DEFAULT_NOTIFICATION_SETTINGS;
+    return {
+      ...DEFAULT_NOTIFICATION_SETTINGS,
+      ...saved,
+      homeAssistant: { ...DEFAULT_NOTIFICATION_SETTINGS.homeAssistant, ...(saved.homeAssistant || {}) },
+      telegram: { ...DEFAULT_NOTIFICATION_SETTINGS.telegram, ...(saved.telegram || {}) }
+    };
+  }
+
+  async saveNotificationSettings(settings: NotificationSettings): Promise<void> {
+    await this.put('notificationSettings', settings, 'current_state');
+    this.log('Impostazioni notifiche e automazioni salvate', 'success');
+    await this.pushToServer();
+  }
+
+  // --- NOTIFICATION LOGS ---
+  async getNotificationLogs(): Promise<NotificationLog[]> {
+    const logs = await this.getAll<NotificationLog>('notificationLogs');
+    return logs.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+  }
+
+  async addNotificationLog(log: NotificationLog): Promise<void> {
+    await this.put('notificationLogs', log);
+    await this.pushToServer();
+  }
+
+  async saveNotificationLog(log: NotificationLog): Promise<void> {
+    return this.addNotificationLog(log);
+  }
+
+  async clearNotificationLogs(): Promise<void> {
+    if (!this.db) await this.init();
+    await new Promise<void>((resolve, reject) => {
+      const tx = this.db!.transaction('notificationLogs', 'readwrite');
+      tx.objectStore('notificationLogs').clear();
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+    this.log('Registro notifiche svuotato', 'info');
+    await this.pushToServer();
+  }
+
   async getStats(): Promise<Record<string, number>> {
     if (!this.db) return {};
-    const stores = ['scenarios', 'rentalRecords', 'tenants', 'landlords', 'properties', 'deadlines', 'invoices'];
+    const stores = ['scenarios', 'rentalRecords', 'tenants', 'landlords', 'properties', 'deadlines', 'invoices', 'receipts', 'notificationLogs'];
     const stats: Record<string, number> = {};
     await Promise.all(stores.map(storeName => {
         return new Promise<void>((resolve) => {
@@ -447,7 +645,10 @@ export class ImmoPlanDB {
           this.log(`Avvio importazione database selettiva...`, 'info');
           const parsed = JSON.parse(jsonString);
           const backupData = parsed.data || parsed;
-          const storeNames = ['config', 'scenarios', 'rentalRecords', 'tenants', 'landlords', 'properties', 'deadlines', 'invoices'];
+          const storeNames = [
+            'config', 'scenarios', 'rentalRecords', 'tenants', 'landlords', 
+            'properties', 'deadlines', 'invoices', 'receipts', 'notificationSettings', 'notificationLogs'
+          ];
           const targetStores = allowedStores ? storeNames.filter(s => allowedStores.includes(s)) : storeNames;
 
           if (targetStores.length === 0) {
@@ -514,7 +715,7 @@ export class ImmoPlanDB {
                 if (Array.isArray(backupData[s])) {
                   backupData[s].forEach((item: any) => store.put(item));
                 } else if (backupData[s]) {
-                  store.put(backupData[s], s === 'config' ? 'current_state' : undefined);
+                  store.put(backupData[s], (s === 'config' || s === 'notificationSettings') ? 'current_state' : undefined);
                 }
               }
             });
@@ -541,10 +742,21 @@ export class ImmoPlanDB {
   }
 
   async exportFullDatabase(): Promise<string> {
-    const [config, scenarios, rentalRecords, tenants, landlords, properties, deadlines, invoices] = await Promise.all([
-        this.getAppData(), this.getScenarios(), this.getRentalRecords(), this.getTenants(), this.getLandlords(), this.getProperties(), this.getDeadlines(), this.getInvoices()
+    const [
+      config, scenarios, rentalRecords, tenants, landlords, 
+      properties, deadlines, invoices, receipts, notificationSettings, notificationLogs
+    ] = await Promise.all([
+      this.getAppData(), this.getScenarios(), this.getRentalRecords(), this.getTenants(), this.getLandlords(), 
+      this.getProperties(), this.getDeadlines(), this.getInvoices(), this.getReceipts(), 
+      this.getNotificationSettings(), this.getNotificationLogs()
     ]);
-    return JSON.stringify({ exportDate: new Date().toISOString(), data: { config, scenarios, rentalRecords, tenants, landlords, properties, deadlines, invoices } }, null, 2);
+    return JSON.stringify({ 
+      exportDate: new Date().toISOString(), 
+      data: { 
+        config, scenarios, rentalRecords, tenants, landlords, 
+        properties, deadlines, invoices, receipts, notificationSettings, notificationLogs 
+      } 
+    }, null, 2);
   }
 
   private async put(storeName: string, value: any, key?: string): Promise<void> {

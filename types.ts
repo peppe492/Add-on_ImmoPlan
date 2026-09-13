@@ -119,6 +119,7 @@ export interface RentalRecord {
   tenantId?: string;
   landlordId?: string;
   attachment?: Attachment;
+  receiptId?: string;
 }
 
 export interface Tenant {
@@ -131,6 +132,8 @@ export interface Tenant {
   notes?: string;
   attachments?: Attachment[];
   createdAt: string;
+  rentDueDay?: number;
+  telegramChatId?: string;
 }
 
 export interface Landlord {
@@ -140,6 +143,7 @@ export interface Landlord {
   phone?: string;
   iban?: string;
   taxCode?: string;
+  address?: string;
   marginalTaxRate?: number;
   notes?: string;
   attachments?: Attachment[];
@@ -231,7 +235,9 @@ export interface Property {
     initialInvestment?: number;
     taxRegime?: 'ESENTE_0' | 'CEDOLARE_10' | 'CEDOLARE_21' | 'IRPEF_ORDINARIA';
     marginalTaxRate?: number;
+    rentDueDay?: number;
   };
+  rentDueDay?: number;
   recurringCosts?: RecurringCost[];
   currentTenantId?: string; 
   documents?: Attachment[];
@@ -354,3 +360,93 @@ export interface InvoiceRecord {
   receiptAttachment?: Attachment | null;
   createdAt?: string;
 }
+
+// ==========================================
+// RENT AUTOMATION & DIGITAL RECEIPT TYPES
+// ==========================================
+
+export type RentPaymentStatus = 'SALDATO' | 'IN_SCADENZA' | 'SCADUTO' | 'PROGRAMMATO';
+
+export interface RentStatusItem {
+  propertyId: string;
+  propertyName: string;
+  tenantId?: string;
+  tenantName?: string;
+  tenantEmail?: string;
+  tenantPhone?: string;
+  tenantTelegramChatId?: string;
+  monthlyRent: number;
+  rentDueDay: number;
+  dueDate: string; // ISO YYYY-MM-DD
+  status: RentPaymentStatus;
+  daysUntilDue: number; // Negative if overdue, 0 if today, positive if upcoming
+  isPaid: boolean;
+  paidDate?: string;
+  paidAmount?: number;
+  remainingAmount?: number;
+  paymentRecordId?: string;
+  receiptId?: string;
+  periodMonth?: number; // 0 to 11
+  periodYear?: number;  // e.g. 2026
+}
+
+export interface RentReceipt {
+  id: string; // e.g. "RCP-2026-0001"
+  receiptNumber: number; // Progressive number within fiscal year (1, 2, ...)
+  fiscalYear: number; // e.g. 2026
+  formattedNumber: string; // e.g. "1/2026"
+  issueDate: string; // ISO date YYYY-MM-DD
+  paymentRecordId: string; // Foreign key to RentalRecord.id
+  propertyId: string;
+  propertyName: string;
+  propertyAddress: string;
+  tenantId: string;
+  tenantName: string;
+  tenantTaxCode?: string;
+  landlordId: string;
+  landlordName: string;
+  landlordTaxCode?: string;
+  landlordAddress?: string;
+  competencePeriod: string; // e.g. "Settembre 2026"
+  rentAmount: number;
+  expensesAmount: number;
+  totalAmount: number;
+  taxRegime: 'CEDOLARE_SECCA' | 'ORDINARIO' | 'ESENTE';
+  stampDutyApplied: boolean; // true if totalAmount > 77.47 and ORDINARIO
+  stampDutyAmount: number; // 2.00 or 0
+  notes?: string;
+  createdAt: string; // ISO timestamp
+}
+
+export interface NotificationSettings {
+  reminderAdvanceDays: number; // Default: 5
+  autoCheckEnabled: boolean; // Default: true
+  homeAssistant: {
+    enabled: boolean;
+    updateSensors: boolean;
+    persistentNotifications: boolean;
+    sensorEntityId: string; // "sensor.immoplan_affitti_stato"
+  };
+  telegram: {
+    enabled: boolean;
+    botToken: string;
+    ownerChatId: string;
+    notifyOwnerOnDue: boolean;
+    notifyTenantOnDue: boolean;
+    autoSendReceiptToTenant: boolean;
+  };
+}
+
+export interface NotificationLog {
+  id: string;
+  timestamp: string; // ISO timestamp
+  channel: 'TELEGRAM' | 'HOME_ASSISTANT';
+  type: 'REMINDER_UPCOMING' | 'REMINDER_OVERDUE' | 'RECEIPT_SENT' | 'TEST';
+  recipient: string;
+  propertyId?: string;
+  propertyName?: string;
+  tenantName?: string;
+  status: 'SUCCESS' | 'FAILED';
+  details?: string;
+}
+

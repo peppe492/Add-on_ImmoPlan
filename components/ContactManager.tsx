@@ -134,20 +134,45 @@ export const ContactManager: React.FC = () => {
                   </div>
                   <div className="field"><label>Email</label><input className="input" type="email" value={formData.email} onChange={e => setFormData({ ...formData, email: e.target.value })} /></div>
                   {activeType === 'TENANT' && (
-                    <div className="field">
-                      <label>Tipologia Contratto</label>
-                      <select 
-                        className="input" 
-                        value={formData.contractType || 'LIBERO_4_4'} 
-                        onChange={e => setFormData({ ...formData, contractType: e.target.value })}
-                      >
-                        <option value="LIBERO_4_4">Canone Libero (4+4)</option>
-                        <option value="CONCORDATO_3_2">Canone Concordato (3+2 - Aliquota 10%)</option>
-                        <option value="COMODATO_USO">Comodato d'Uso Gratuito (Esente Tasse 0%)</option>
-                        <option value="TRANSITORIO">Transitorio</option>
-                        <option value="STUDENTI">Studenti Universitari</option>
-                      </select>
-                    </div>
+                    <>
+                      <div className="field">
+                        <label>Tipologia Contratto</label>
+                        <select 
+                          className="input" 
+                          value={formData.contractType || 'LIBERO_4_4'} 
+                          onChange={e => setFormData({ ...formData, contractType: e.target.value })}
+                        >
+                          <option value="LIBERO_4_4">Canone Libero (4+4)</option>
+                          <option value="CONCORDATO_3_2">Canone Concordato (3+2 - Aliquota 10%)</option>
+                          <option value="COMODATO_USO">Comodato d'Uso Gratuito (Esente Tasse 0%)</option>
+                          <option value="TRANSITORIO">Transitorio</option>
+                          <option value="STUDENTI">Studenti Universitari</option>
+                        </select>
+                      </div>
+                      <div className="grid2">
+                        <div className="field">
+                          <label>Giorno Scadenza Canone (1-31)</label>
+                          <input 
+                            className="input mono" 
+                            type="number" 
+                            min="1" 
+                            max="31" 
+                            value={formData.rentDueDay ?? 5} 
+                            onChange={e => setFormData({ ...formData, rentDueDay: parseInt(e.target.value) || 5 })} 
+                          />
+                        </div>
+                        <div className="field">
+                          <label>Chat ID Telegram (Opzionale)</label>
+                          <input 
+                            className="input mono" 
+                            type="text" 
+                            placeholder="Es. 123456789"
+                            value={formData.telegramChatId || ''} 
+                            onChange={e => setFormData({ ...formData, telegramChatId: e.target.value })} 
+                          />
+                        </div>
+                      </div>
+                    </>
                   )}
                   {activeType === 'LANDLORD' && <div className="field"><label>IBAN</label><input className="input mono" type="text" value={formData.iban} onChange={e => setFormData({ ...formData, iban: e.target.value })} /></div>}
                   <div className="field"><label>Documenti &amp; Allegati</label>

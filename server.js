@@ -57,7 +57,8 @@ app.get('/api/sync', (req, res) => {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
   if (fs.existsSync(DB_FILE)) {
     try {
-      res.json(JSON.parse(fs.readFileSync(DB_FILE, 'utf8')));
+      const data = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
+      res.json(data);
     } catch (e) { res.status(500).json({ error: "DB Error" }); }
   } else {
     res.json({});
@@ -67,7 +68,39 @@ app.get('/api/sync', (req, res) => {
 app.post('/api/sync', (req, res) => {
   try {
     ensureDirectoryExistence(DB_FILE);
-    fs.writeFileSync(DB_FILE, JSON.stringify(req.body, null, 2), 'utf8');
+    let existingData = {};
+    if (fs.existsSync(DB_FILE)) {
+      try {
+        existingData = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
+      } catch (err) {}
+    }
+
+    // Empty body (e.g. clearAll)
+    if (!req.body || Object.keys(req.body).length === 0) {
+      fs.writeFileSync(DB_FILE, JSON.stringify({}, null, 2), 'utf8');
+      return res.json({ success: true });
+    }
+
+    const merged = { ...existingData, ...req.body };
+
+    // Merge notificationLogs if present in both to prevent log loss
+    if (existingData.notificationLogs && req.body.notificationLogs) {
+      const logMap = new Map();
+      existingData.notificationLogs.forEach(l => { if (l && l.id) logMap.set(l.id, l); });
+      req.body.notificationLogs.forEach(l => { if (l && l.id) logMap.set(l.id, l); });
+      merged.notificationLogs = Array.from(logMap.values())
+        .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+        .slice(0, 500);
+    } else if (existingData.notificationLogs && !req.body.notificationLogs) {
+      merged.notificationLogs = existingData.notificationLogs;
+    }
+
+    // Preserve systemLogs if existing and not in body
+    if (existingData.systemLogs && !req.body.systemLogs) {
+      merged.systemLogs = existingData.systemLogs;
+    }
+
+    fs.writeFileSync(DB_FILE, JSON.stringify(merged, null, 2), 'utf8');
     res.json({ success: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -504,27 +537,43 @@ app.post('/api/forecast/run-batch', (req, res) => {
 // --- WEBHOOK SCADENZE ---
 app.post('/api/deadlines/:id/complete', (req, res) => {
   try {
-    if (!fs.existsSync(DB_FILE)) return res.status(404).json({ error: "Database not found" });
-    const dbData = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
+    ensureDirectoryExistence(DB_FILE);
+    let dbData = {};
+    if (fs.existsSync(DB_FILE)) {
+      try {
+        dbData = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
+      } catch (e) {}
+    }
     
-    if (!dbData.deadlines) return res.status(404).json({ error: "No deadlines in DB" });
+    if (!Array.isArray(dbData.deadlines)) dbData.deadlines = [];
     
     let found = false;
     dbData.deadlines = dbData.deadlines.map(d => {
       if (d.id === req.params.id) {
         d.isCompleted = true;
+        d.completedAt = new Date().toISOString();
         found = true;
       }
       return d;
     });
     
-    if (found) {
-      fs.writeFileSync(DB_FILE, JSON.stringify(dbData, null, 2), 'utf8');
-      console.log(`[SYSTEM] Scadenza ${req.params.id} segnata come completata via webhook.`);
-      res.json({ success: true, message: "Scadenza aggiornata." });
-    } else {
-      res.status(404).json({ error: "Scadenza non trovata" });
+    if (!found) {
+      const now = new Date();
+      const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+      dbData.deadlines.push({
+        id: req.params.id,
+        title: req.body?.title || 'Scadenza automatica',
+        date: req.body?.date || todayStr,
+        isCompleted: true,
+        completedAt: now.toISOString(),
+        notes: req.body?.notes || 'Completata via webhook/azione'
+      });
+      found = true;
     }
+    
+    fs.writeFileSync(DB_FILE, JSON.stringify(dbData, null, 2), 'utf8');
+    console.log(`[SYSTEM] Scadenza ${req.params.id} segnata come completata via webhook.`);
+    res.json({ success: true, message: "Scadenza aggiornata." });
   } catch (e) {
     console.error("Errore webhook scadenze:", e);
     res.status(500).json({ error: e.message });
@@ -538,17 +587,20 @@ setInterval(async () => {
   try {
     if (!SUPERVISOR_TOKEN || !fs.existsSync(DB_FILE)) return;
     
-    const today = new Date().toISOString().split('T')[0];
+    const now = new Date();
+    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
     if (lastNotificationDate === today) return; // Già notificato oggi
 
     const dbData = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
     let deadlines = dbData.deadlines || [];
     const properties = dbData.properties || [];
+    const rentalRecords = dbData.rentalRecords || [];
+    const tenants = dbData.tenants || [];
     
     // Genera scadenze automatiche
     const autoDeadlines = [];
-    const currentYear = new Date().getFullYear();
-    const currentMonth = new Date().getMonth();
+    const currentYear = now.getFullYear();
+    const currentMonth = now.getMonth();
     
     const config = dbData.config;
     
@@ -576,34 +628,85 @@ setInterval(async () => {
     }
 
     properties.forEach(prop => {
-      if (prop.financials && prop.financials.monthlyRent && prop.financials.monthlyRent > 0) {
+      // 1. Canone di Affitto Mensile
+      const monthlyRent = Number(prop.financials?.monthlyRent) || 0;
+      const isRentedStatus = prop.status === 'RENTED' || Boolean(prop.currentTenantId);
+      const shouldTrackRent = monthlyRent > 0 && (isRentedStatus || (prop.status !== 'EMPTY' && prop.status !== 'MAIN_RESIDENCE'));
+
+      if (shouldTrackRent) {
+        const tenant = tenants.find(t => t.id === prop.currentTenantId);
+        let dueDay = 5;
+        if (tenant && typeof tenant.rentDueDay === 'number' && tenant.rentDueDay >= 1 && tenant.rentDueDay <= 31) {
+          dueDay = Math.floor(tenant.rentDueDay);
+        } else if (prop.financials && typeof prop.financials.rentDueDay === 'number' && prop.financials.rentDueDay >= 1 && prop.financials.rentDueDay <= 31) {
+          dueDay = Math.floor(prop.financials.rentDueDay);
+        } else if (typeof prop.rentDueDay === 'number' && prop.rentDueDay >= 1 && prop.rentDueDay <= 31) {
+          dueDay = Math.floor(prop.rentDueDay);
+        }
+
         for (let m = -1; m <= 3; m++) {
-          const targetDate = new Date(currentYear, currentMonth + m, 5);
+          const anchorDate = new Date(currentYear, currentMonth + m, 1);
+          const targetYear = anchorDate.getFullYear();
+          const targetMonth = anchorDate.getMonth();
+          const maxDay = new Date(Date.UTC(targetYear, targetMonth + 1, 0)).getUTCDate();
+          const actualDay = Math.min(dueDay, maxDay);
+          const dateStr = `${targetYear}-${String(targetMonth + 1).padStart(2, '0')}-${String(actualDay).padStart(2, '0')}`;
+          const deadlineId = `auto_rent_${prop.id}_${dateStr}`;
+
+          // Cross-reference rentalRecords to eliminate false alarms
+          const matching = rentalRecords.filter(r =>
+            r.propertyId === prop.id &&
+            Number(r.year) === targetYear &&
+            Number(r.month) === targetMonth
+          );
+          const totalPaid = matching.reduce((sum, r) => sum + (Number(r.income) || 0), 0);
+          const isPaid = totalPaid >= monthlyRent;
+
           autoDeadlines.push({
-            id: `auto_rent_${prop.id}_${targetDate.toISOString().split('T')[0]}`,
+            id: deadlineId,
             title: `${prop.name}: Affitto`,
-            date: targetDate.toISOString().split('T')[0],
-            amount: prop.financials.monthlyRent,
-            isCompleted: false,
-            propertyId: prop.id
+            date: dateStr,
+            type: 'RENT',
+            amount: monthlyRent,
+            isCompleted: isPaid,
+            propertyId: prop.id,
+            tenantId: prop.currentTenantId || undefined,
+            notes: isPaid 
+              ? 'Canone saldato e registrato' 
+              : (totalPaid > 0 ? `Pagamento parziale (${totalPaid}€/${monthlyRent}€)` : 'In attesa di pagamento')
           });
         }
       }
       
+      // 2. Spese Condominiali
       if (prop.financials && prop.financials.condoFees && prop.financials.condoFees > 0) {
         for (let m = -1; m <= 3; m++) {
-          const targetDate = new Date(currentYear, currentMonth + m, 10);
+          const anchorDate = new Date(currentYear, currentMonth + m, 1);
+          const targetYear = anchorDate.getFullYear();
+          const targetMonth = anchorDate.getMonth();
+          const dateStr = `${targetYear}-${String(targetMonth + 1).padStart(2, '0')}-10`;
+          const deadlineId = `auto_condo_${prop.id}_${dateStr}`;
+
+          const matching = rentalRecords.filter(r =>
+            r.propertyId === prop.id &&
+            Number(r.year) === targetYear &&
+            Number(r.month) === targetMonth
+          );
+          const condoPaid = matching.some(r => (Number(r.condo) || 0) >= (Number(prop.financials.condoFees) || 0));
+
           autoDeadlines.push({
-            id: `auto_condo_${prop.id}_${targetDate.toISOString().split('T')[0]}`,
+            id: deadlineId,
             title: `${prop.name}: Spese Condominiali`,
-            date: targetDate.toISOString().split('T')[0],
+            date: dateStr,
+            type: 'MAINTENANCE',
             amount: prop.financials.condoFees,
-            isCompleted: false,
+            isCompleted: condoPaid,
             propertyId: prop.id
           });
         }
       }
 
+      // 3. Rata Mutuo
       if (prop.financials && prop.financials.mortgageAmount && prop.financials.mortgageAmount > 0) {
         const hasExplicit = prop.recurringCosts?.some(c => c.category === 'MORTGAGE');
         if (!hasExplicit) {
@@ -611,44 +714,63 @@ setInterval(async () => {
           let day = 1;
           if (prop.financials.mortgageStartDate) {
              const parts = prop.financials.mortgageStartDate.split('-');
-             if (parts.length >= 3) day = parseInt(parts[2]);
+             if (parts.length >= 3) day = parseInt(parts[2], 10) || 1;
           }
           for (let m = -1; m <= 3; m++) {
-            const targetDate = new Date(currentYear, currentMonth + m, day);
+            const anchorDate = new Date(currentYear, currentMonth + m, 1);
+            const targetYear = anchorDate.getFullYear();
+            const targetMonth = anchorDate.getMonth();
+            const maxDay = new Date(Date.UTC(targetYear, targetMonth + 1, 0)).getUTCDate();
+            const actualDay = Math.min(day, maxDay);
+            const dateStr = `${targetYear}-${String(targetMonth + 1).padStart(2, '0')}-${String(actualDay).padStart(2, '0')}`;
+            const deadlineId = `auto_mortg_${prop.id}_${dateStr}`;
+
+            const matching = rentalRecords.filter(r =>
+              r.propertyId === prop.id &&
+              Number(r.year) === targetYear &&
+              Number(r.month) === targetMonth
+            );
+            const mortgagePaid = matching.some(r => (Number(r.mortgage) || 0) >= (Number(monthly) || 0));
+
             autoDeadlines.push({
-              id: `auto_mortg_${prop.id}_${targetDate.toISOString().split('T')[0]}`,
+              id: deadlineId,
               title: `${prop.name}: Rata Mutuo`,
-              date: targetDate.toISOString().split('T')[0],
+              date: dateStr,
+              type: 'MORTGAGE',
               amount: monthly,
-              isCompleted: false,
+              isCompleted: mortgagePaid,
               propertyId: prop.id
             });
           }
         }
       }
 
+      // 4. Recurring Costs
       if (prop.recurringCosts) {
         prop.recurringCosts.forEach(cost => {
           if (!cost.amount || cost.amount <= 0) return;
           let day = 1;
           if (cost.date) {
             const parts = cost.date.split('-');
-            if (parts.length >= 3) day = parseInt(parts[2]) || 1;
-            else if (parts.length === 2) day = parseInt(parts[1]) || 1;
+            if (parts.length >= 3) day = parseInt(parts[2], 10) || 1;
+            else if (parts.length === 2) day = parseInt(parts[1], 10) || 1;
             else {
               const dm = cost.date.match(/\b([1-9]|[12]\d|3[01])\b/);
-              if (dm) day = parseInt(dm[1]) || 1;
+              if (dm) day = parseInt(dm[1], 10) || 1;
             }
           }
           if (cost.frequency === 'MONTHLY') {
             for (let m = -1; m <= 3; m++) {
-              const maxDay = new Date(currentYear, currentMonth + m + 1, 0).getDate();
+              const anchorDate = new Date(currentYear, currentMonth + m, 1);
+              const targetYear = anchorDate.getFullYear();
+              const targetMonth = anchorDate.getMonth();
+              const maxDay = new Date(Date.UTC(targetYear, targetMonth + 1, 0)).getUTCDate();
               const actualDay = Math.min(day, maxDay);
-              const targetDate = new Date(currentYear, currentMonth + m, actualDay);
+              const dateStr = `${targetYear}-${String(targetMonth + 1).padStart(2, '0')}-${String(actualDay).padStart(2, '0')}`;
               autoDeadlines.push({
-                id: `auto_cost_${prop.id}_${cost.id}_${targetDate.toISOString().split('T')[0]}`,
+                id: `auto_cost_${prop.id}_${cost.id}_${dateStr}`,
                 title: `${prop.name}: ${cost.name}`,
-                date: targetDate.toISOString().split('T')[0],
+                date: dateStr,
                 amount: cost.amount,
                 isCompleted: false,
                 propertyId: prop.id
@@ -658,15 +780,17 @@ setInterval(async () => {
              const parts = cost.date.split('-');
              let monthIndex = 0, dayIndex = 1;
              if (parts.length >= 2) {
-                 monthIndex = parseInt(parts[parts.length-2]) - 1;
-                 dayIndex = parseInt(parts[parts.length-1]);
+                 monthIndex = parseInt(parts[parts.length-2], 10) - 1;
+                 dayIndex = parseInt(parts[parts.length-1], 10);
              }
              [currentYear, currentYear + 1].forEach(y => {
-                 const targetDate = new Date(y, monthIndex, dayIndex);
+                 const maxDay = new Date(Date.UTC(y, monthIndex + 1, 0)).getUTCDate();
+                 const actualDay = Math.min(dayIndex, maxDay);
+                 const dateStr = `${y}-${String(monthIndex + 1).padStart(2, '0')}-${String(actualDay).padStart(2, '0')}`;
                  autoDeadlines.push({
-                    id: `auto_cost_${prop.id}_${cost.id}_${targetDate.toISOString().split('T')[0]}`,
+                    id: `auto_cost_${prop.id}_${cost.id}_${dateStr}`,
                     title: `${prop.name}: ${cost.name}`,
-                    date: targetDate.toISOString().split('T')[0],
+                    date: dateStr,
                     amount: cost.amount,
                     isCompleted: false,
                     propertyId: prop.id
@@ -687,13 +811,44 @@ setInterval(async () => {
       }
     });
 
-    // Unisci scadenze manuali e automatiche
+    // Unisci scadenze manuali e automatiche, propagando lo stato isCompleted
     const manualMap = new Map(deadlines.map(d => [d.id, d]));
     autoDeadlines.forEach(auto => {
-      if (!manualMap.has(auto.id)) deadlines.push(auto);
+      if (!manualMap.has(auto.id)) {
+        deadlines.push(auto);
+      } else {
+        const existing = manualMap.get(auto.id);
+        if (auto.id.startsWith('auto_rent_') || auto.id.startsWith('auto_condo_') || auto.id.startsWith('auto_mortg_')) {
+          if (auto.isCompleted && !existing.isCompleted) {
+            existing.isCompleted = true;
+            existing.notes = auto.notes || existing.notes;
+          }
+        }
+      }
     });
     
-    const pending = deadlines.filter(d => !d.isCompleted && d.date <= today);
+    const pending = deadlines.filter(d => {
+      if (d.isCompleted) return false;
+      if (d.date > today) return false;
+
+      // Controllo difensivo per canoni di affitto
+      if (d.type === 'RENT' || (d.id && d.id.startsWith('auto_rent_'))) {
+        const parts = (d.date || '').split('-');
+        if (parts.length >= 2) {
+          const dYear = parseInt(parts[0], 10);
+          const dMonth = parseInt(parts[1], 10) - 1;
+          const totalPaid = rentalRecords
+            .filter(r => r.propertyId === d.propertyId && Number(r.year) === dYear && Number(r.month) === dMonth)
+            .reduce((sum, r) => sum + (Number(r.income) || 0), 0);
+          const expectedAmount = Number(d.amount) || 0;
+          if (expectedAmount > 0 ? totalPaid >= expectedAmount : totalPaid > 0) {
+            d.isCompleted = true;
+            return false;
+          }
+        }
+      }
+      return true;
+    });
     
     if (pending.length > 0) {
       console.log(`[SYSTEM] Trovate ${pending.length} scadenze pendenti. Invio eventi ad HA.`);
@@ -726,10 +881,358 @@ setInterval(async () => {
         body: JSON.stringify({ notification_id: "immoplan_deadlines" })
       }).catch(()=>{});
     }
-  } catch(e) {
-    console.error("Errore controllo scadenze:", e);
+// ========================================================
+// NOTIFICHE & AUTOMAZIONI AFFITTO (TELEGRAM & HOME ASSISTANT)
+// ========================================================
+
+const DEFAULT_NOTIF_SETTINGS = {
+  reminderAdvanceDays: 5,
+  autoCheckEnabled: true,
+  homeAssistant: {
+    enabled: true,
+    updateSensors: true,
+    persistentNotifications: true,
+    sensorEntityId: 'sensor.immoplan_affitti_stato'
+  },
+  telegram: {
+    enabled: false,
+    botToken: '',
+    ownerChatId: '',
+    notifyOwnerOnDue: true,
+    notifyTenantOnDue: true,
+    autoSendReceiptToTenant: true
   }
-}, 60 * 60 * 1000); // 1 ora
+};
+
+function escapeTgHtml(text) {
+  if (!text) return '';
+  return String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+async function sendTelegramText(botToken, chatId, text) {
+  if (!botToken || !chatId) return { success: false, error: 'Token o Chat ID mancante' };
+  try {
+    const res = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: chatId, text, parse_mode: 'HTML' })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.ok) {
+      return { success: false, error: data.description || `HTTP ${res.status}` };
+    }
+    return { success: true, messageId: data.result?.message_id };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+}
+
+async function sendTelegramDoc(botToken, chatId, pdfBuffer, filename, caption = '') {
+  if (!botToken || !chatId || !pdfBuffer) return { success: false, error: 'Parametri documento mancanti' };
+  try {
+    const formData = new FormData();
+    formData.append('chat_id', String(chatId));
+    formData.append('caption', caption);
+    const blob = new Blob([pdfBuffer], { type: 'application/pdf' });
+    formData.append('document', blob, filename || 'quietanza.pdf');
+
+    const res = await fetch(`https://api.telegram.org/bot${botToken}/sendDocument`, {
+      method: 'POST',
+      body: formData
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.ok) {
+      return { success: false, error: data.description || `HTTP ${res.status}` };
+    }
+    return { success: true, documentId: data.result?.document?.file_id };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+}
+
+function escapePdf(str) {
+  if (!str) return '';
+  return String(str).replace(/\\/g, '\\\\').replace(/\(/g, '\\(').replace(/\)/g, '\\)');
+}
+
+function buildPdfBuffer(receipt) {
+  const width = 595.28;
+  const height = 841.89;
+  const stampClause = receipt.taxRegime === 'CEDOLARE_SECCA'
+    ? "Operazione soggetta a cedolare secca ex art. 3 D.Lgs. 23/2011. Imposta di bollo non dovuta."
+    : (receipt.totalAmount > 77.47
+        ? "Imposta di bollo di Euro 2,00 assolta sull'originale ai sensi dell'art. 13 DPR 642/1972."
+        : "Esente da imposta di bollo ex art. 13 DPR 642/1972 (non sup. 77,47 Euro).");
+
+  const streamLines = [
+    '0.2 0.3 0.5 RG', '0.95 0.97 1.0 rg', '40 760 515 50 re', 'B',
+    'BT', '/F2 20 Tf', '55 778 Td', `(${escapePdf(`QUIETANZA DI PAGAMENTO - RICEVUTA N. ${receipt.formattedNumber}`)}) Tj`, 'ET',
+    'BT', '/F1 10 Tf', '55 765 Td', `(${escapePdf(`Data di emissione: ${(receipt.issueDate || '').split('T')[0]}`)}) Tj`, 'ET',
+    '0.8 0.8 0.8 RG', '40 640 515 105 re', 'S',
+    'BT', '/F2 12 Tf', '55 725 Td', `(${escapePdf('DATI DEL LOCATORE (PROPRIETARIO)')}) Tj`,
+    '/F1 10 Tf', '0 -16 Td', `(${escapePdf(`Nome / Ragione Sociale: ${receipt.landlordName || 'Locatore'}`)}) Tj`,
+    '0 -14 Td', `(${escapePdf(`Codice Fiscale: ${receipt.landlordTaxCode || '-'}`)}) Tj`,
+    '0 -14 Td', `(${escapePdf(`Indirizzo: ${receipt.landlordAddress || '-'}`)}) Tj`, 'ET',
+    '40 520 515 105 re', 'S',
+    'BT', '/F2 12 Tf', '55 605 Td', `(${escapePdf('DATI DEL CONDUTTORE (INQUILINO)')}) Tj`,
+    '/F1 10 Tf', '0 -16 Td', `(${escapePdf(`Nome / Ragione Sociale: ${receipt.tenantName || 'Conduttore'}`)}) Tj`,
+    '0 -14 Td', `(${escapePdf(`Codice Fiscale: ${receipt.tenantTaxCode || '-'}`)}) Tj`, 'ET',
+    '40 400 515 105 re', 'S',
+    'BT', '/F2 12 Tf', '55 485 Td', '(DETTAGLI IMMOBILE E COMPETENZA) Tj',
+    '/F1 10 Tf', '0 -16 Td', `(${escapePdf(`Immobile: ${receipt.propertyName || '-'}`)}) Tj`,
+    '0 -14 Td', `(${escapePdf(`Ubicazione: ${receipt.propertyAddress || '-'}`)}) Tj`,
+    '0 -14 Td', `(${escapePdf(`Periodo di competenza: ${receipt.competencePeriod || '-'}`)}) Tj`, 'ET',
+    '0.15 0.45 0.7 rg', '40 350 515 30 re', 'f',
+    'BT', '/F2 11 Tf', '1 1 1 rg', '55 360 Td', '(VOCE CONTABILE) Tj', '400 0 Td', '(IMPORTO) Tj', 'ET',
+    '0 0 0 rg', '40 315 515 35 re', 'S',
+    'BT', '/F1 10 Tf', '55 328 Td', '(Canone di locazione concordato/pattuito) Tj', '400 0 Td', `(${escapePdf(`Euro ${(receipt.rentAmount || 0).toFixed(2)}`)}) Tj`, 'ET',
+    '40 280 515 35 re', 'S',
+    'BT', '/F1 10 Tf', '55 293 Td', '(Oneri accessori e spese condominiali) Tj', '400 0 Td', `(${escapePdf(`Euro ${(receipt.expensesAmount || 0).toFixed(2)}`)}) Tj`, 'ET',
+    '0.92 0.94 0.98 rg', '40 240 515 40 re', 'f',
+    '0.2 0.3 0.5 RG', '40 240 515 40 re', 'S',
+    'BT', '/F2 13 Tf', '0.1 0.2 0.4 rg', '55 254 Td', '(TOTALE CORRISPOSTO E SALDATO) Tj', '380 0 Td', `(${escapePdf(`Euro ${(receipt.totalAmount || 0).toFixed(2)}`)}) Tj`, 'ET',
+    '40 140 515 85 re', 'S',
+    'BT', '/F2 10 Tf', '0 0 0 rg', '55 205 Td', '(INFORMAZIONI FISCALI E DICHIARAZIONE DI QUIETANZA) Tj',
+    '/F1 9 Tf', '0 -16 Td', `(${escapePdf(`Regime fiscale: ${receipt.taxRegime || 'CEDOLARE_SECCA'}`)}) Tj`,
+    '0 -14 Td', `(${escapePdf(stampClause)}) Tj`,
+    '0 -14 Td', '(Il locatore rilascia la presente quale quietanza liberatoria a saldo.) Tj', 'ET',
+    'BT', '/F2 10 Tf', '380 75 Td', '(Firma del locatore per quietanza) Tj', 'ET',
+    '360 60 m 530 60 l S'
+  ];
+
+  const streamContent = streamLines.join('\n');
+  const streamLength = Buffer.byteLength(streamContent, 'binary');
+
+  const objects = [
+    '1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n',
+    '2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n',
+    `3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${width} ${height}] /Contents 4 0 R /Resources << /Font << /F1 5 0 R /F2 6 0 R >> >> >>\nendobj\n`,
+    `4 0 obj\n<< /Length ${streamLength} >>\nstream\n${streamContent}\nendstream\nendobj\n`,
+    '5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n',
+    '6 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>\nendobj\n'
+  ];
+
+  let pdf = '%PDF-1.4\n%\xE2\xE3\xCF\xD3\n';
+  const offsets = [0];
+  for (let i = 0; i < objects.length; i++) {
+    offsets.push(Buffer.byteLength(pdf, 'binary'));
+    pdf += objects[i];
+  }
+  const startXref = Buffer.byteLength(pdf, 'binary');
+  pdf += 'xref\n';
+  pdf += `0 ${objects.length + 1}\n`;
+  pdf += '0000000000 65535 f \n';
+  for (let i = 1; i <= objects.length; i++) {
+    pdf += `${String(offsets[i]).padStart(10, '0')} 00000 n \n`;
+  }
+  pdf += 'trailer\n';
+  pdf += `<< /Size ${objects.length + 1} /Root 1 0 R >>\n`;
+  pdf += `startxref\n${startXref}\n%%EOF\n`;
+  return Buffer.from(pdf, 'binary');
+}
+
+app.get('/api/notifications/settings', (req, res) => {
+  try {
+    let dbData = {};
+    if (fs.existsSync(DB_FILE)) dbData = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
+    res.json({ settings: dbData.notificationSettings || DEFAULT_NOTIF_SETTINGS });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/notifications/settings', (req, res) => {
+  try {
+    ensureDirectoryExistence(DB_FILE);
+    let dbData = {};
+    if (fs.existsSync(DB_FILE)) dbData = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
+    dbData.notificationSettings = { ...DEFAULT_NOTIF_SETTINGS, ...req.body };
+    fs.writeFileSync(DB_FILE, JSON.stringify(dbData, null, 2), 'utf8');
+    res.json({ success: true, settings: dbData.notificationSettings });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/notifications/test-ha', async (req, res) => {
+  try {
+    const token = req.body?.supervisorToken || SUPERVISOR_TOKEN;
+    const supervisorUrl = req.body?.supervisorUrl || 'http://supervisor';
+    if (!token) {
+      return res.json({ success: false, message: 'Nessun SUPERVISOR_TOKEN trovato nell\'ambiente Add-on.' });
+    }
+    const resp = await fetch(`${supervisorUrl.replace(/\/$/, '')}/core/api/config`, {
+      headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' }
+    });
+    if (resp.ok) {
+      const data = await resp.json();
+      return res.json({ success: true, message: `Connessione a Home Assistant riuscita (v${data.version || 'unknown'})`, haVersion: data.version });
+    }
+    res.json({ success: false, message: `Errore Home Assistant (HTTP ${resp.status})` });
+  } catch (e) {
+    res.json({ success: false, message: `Supervisor non raggiungibile: ${e.message}` });
+  }
+});
+
+app.post('/api/notifications/test-telegram', async (req, res) => {
+  try {
+    const botToken = (req.body?.botToken || '').trim();
+    const chatId = req.body?.chatId;
+    if (!botToken) return res.json({ success: false, message: 'Bot Token mancante' });
+
+    const resp = await fetch(`https://api.telegram.org/bot${botToken}/getMe`);
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok || !data.ok) {
+      return res.json({ success: false, message: `Errore Telegram: ${data.description || resp.status}` });
+    }
+
+    if (chatId) {
+      const sendRes = await sendTelegramText(botToken, chatId, '🔔 <b>Test Connessione ImmoPlan</b>: Bot Telegram configurato e funzionante!');
+      if (!sendRes.success) {
+        return res.json({ success: false, message: `Bot valido (@${data.result.username}), ma invio messaggio fallito su Chat ID ${chatId}: ${sendRes.error}` });
+      }
+    }
+
+    res.json({ success: true, message: `Connessione riuscita con @${data.result.username}`, botUsername: data.result.username });
+  } catch (e) {
+    res.json({ success: false, message: `Errore connessione Telegram: ${e.message}` });
+  }
+});
+
+app.post('/api/notifications/send-reminder', async (req, res) => {
+  try {
+    const { propertyId, channel = 'ALL', customMessage } = req.body || {};
+    if (!propertyId) return res.status(400).json({ success: false, error: 'propertyId mancante' });
+
+    let dbData = {};
+    if (fs.existsSync(DB_FILE)) dbData = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
+    const prop = (dbData.properties || []).find(p => p.id === propertyId);
+    if (!prop) return res.status(404).json({ success: false, error: 'Immobile non trovato' });
+
+    const tenant = (dbData.tenants || []).find(t => t.id === prop.currentTenantId);
+    const settings = dbData.notificationSettings || DEFAULT_NOTIF_SETTINGS;
+    const sentTo = [];
+
+    const rentAmount = prop.financials?.monthlyRent || 0;
+    const msgText = customMessage || `Gentile ${tenant?.name || 'Conduttore'}, ti ricordiamo la scadenza del canone di locazione di <b>€ ${rentAmount.toFixed(2)}</b> per l'immobile <b>${prop.name}</b>. Ti ringraziamo per la puntualità!`;
+
+    // 1. Telegram
+    if (channel === 'ALL' || channel === 'TELEGRAM') {
+      if (settings.telegram?.enabled && settings.telegram?.botToken) {
+        const targetChatId = tenant?.telegramChatId || settings.telegram.ownerChatId;
+        if (targetChatId) {
+          const tgRes = await sendTelegramText(settings.telegram.botToken, targetChatId, `🏠 <b>ImmoPlan · Promemoria Canone</b>\n\n${msgText}`);
+          if (tgRes.success) sentTo.push(`Telegram (${targetChatId})`);
+        }
+      }
+    }
+
+    // 2. Home Assistant
+    if (channel === 'ALL' || channel === 'HOME_ASSISTANT') {
+      if (SUPERVISOR_TOKEN) {
+        await fetch(`http://supervisor/core/api/services/persistent_notification/create`, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${SUPERVISOR_TOKEN}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            title: `🔔 Promemoria Affitto: ${prop.name}`,
+            message: `Canone di € ${rentAmount} in scadenza per ${tenant?.name || 'Inquilino'}.`,
+            notification_id: `immoplan_reminder_${prop.id}`
+          })
+        }).catch(() => {});
+        sentTo.push('Home Assistant (Persistent Notification)');
+      }
+    }
+
+    // Logga l'evento
+    if (!dbData.notificationLogs) dbData.notificationLogs = [];
+    dbData.notificationLogs.unshift({
+      id: `log_${Date.now()}`,
+      timestamp: new Date().toISOString(),
+      channel: channel === 'ALL' ? 'TELEGRAM' : channel,
+      type: 'REMINDER_UPCOMING',
+      recipient: sentTo.join(', ') || 'Nessuno',
+      propertyId: prop.id,
+      propertyName: prop.name,
+      tenantName: tenant?.name,
+      status: sentTo.length > 0 ? 'SUCCESS' : 'FAILED',
+      details: sentTo.length > 0 ? `Inviato a: ${sentTo.join(', ')}` : 'Nessun canale abilitato o configurato'
+    });
+    if (dbData.notificationLogs.length > 200) dbData.notificationLogs = dbData.notificationLogs.slice(0, 200);
+    fs.writeFileSync(DB_FILE, JSON.stringify(dbData, null, 2), 'utf8');
+
+    res.json({ success: sentTo.length > 0, sentTo });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+app.post('/api/notifications/send-receipt', async (req, res) => {
+  try {
+    const { receipt, recipientChatId } = req.body || {};
+    if (!receipt) return res.status(400).json({ success: false, error: 'Dati ricevuta mancanti' });
+
+    let dbData = {};
+    if (fs.existsSync(DB_FILE)) dbData = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
+    const settings = dbData.notificationSettings || DEFAULT_NOTIF_SETTINGS;
+
+    const botToken = settings.telegram?.botToken;
+    const targetChat = recipientChatId || settings.telegram?.ownerChatId;
+    if (!botToken || !targetChat) {
+      return res.status(400).json({ success: false, message: 'Bot Token Telegram o Chat ID destinatario mancante nelle impostazioni' });
+    }
+
+    const pdfBuf = buildPdfBuffer(receipt);
+    const filename = `Ricevuta_${(receipt.formattedNumber || 'quietanza').replace('/', '_')}.pdf`;
+    const caption = `📄 <b>Quietanza di Pagamento N. ${receipt.formattedNumber}</b>\nImmobile: <b>${receipt.propertyName}</b>\nImporto saldato: <b>€ ${(receipt.totalAmount || 0).toFixed(2)}</b>`;
+
+    const docRes = await sendTelegramDoc(botToken, targetChat, pdfBuf, filename, caption);
+    if (!docRes.success) {
+      return res.status(500).json({ success: false, message: docRes.error });
+    }
+
+    // Logga
+    if (!dbData.notificationLogs) dbData.notificationLogs = [];
+    dbData.notificationLogs.unshift({
+      id: `log_${Date.now()}`,
+      timestamp: new Date().toISOString(),
+      channel: 'TELEGRAM',
+      type: 'RECEIPT_SENT',
+      recipient: String(targetChat),
+      propertyId: receipt.propertyId,
+      propertyName: receipt.propertyName,
+      tenantName: receipt.tenantName,
+      status: 'SUCCESS',
+      details: `Ricevuta ${receipt.formattedNumber} inviata via Telegram`
+    });
+    fs.writeFileSync(DB_FILE, JSON.stringify(dbData, null, 2), 'utf8');
+
+    res.json({ success: true, message: `Ricevuta ${receipt.formattedNumber} inviata con successo su Telegram!` });
+  } catch (e) {
+    res.status(500).json({ success: false, message: e.message });
+  }
+});
+
+app.get('/api/notifications/logs', (req, res) => {
+  try {
+    let dbData = {};
+    if (fs.existsSync(DB_FILE)) dbData = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
+    res.json(dbData.notificationLogs || []);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/notifications/clear-logs', (req, res) => {
+  try {
+    let dbData = {};
+    if (fs.existsSync(DB_FILE)) dbData = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
+    dbData.notificationLogs = [];
+    fs.writeFileSync(DB_FILE, JSON.stringify(dbData, null, 2), 'utf8');
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
 
 app.get('/api/status', (req, res) => res.json({ status: 'online' }));
 

@@ -1,7 +1,11 @@
 
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { RentalRecord, Property, Tenant, Attachment } from '../types';
+import { RentalRecord, Property, Tenant, Attachment, RentReceipt, RentStatusItem } from '../types';
 import { db } from '../services/dbService';
+import { calculateRentStatus } from '../services/rentStatusService';
+import { createRentReceipt } from '../services/receiptPdfService';
+import { notificationService } from '../services/notificationService';
+import { RentReceiptModal } from './RentReceiptModal';
 
 const MONTHS = [
   'Gennaio', 'Febbraio', 'Marzo', 'Aprile', 'Maggio', 'Giugno',
@@ -25,11 +29,17 @@ const readFile = (file: File): Promise<Attachment> => {
 };
 
 export const RentalManager: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<'REGISTRY' | 'SIMULATION'>('REGISTRY');
+  const [activeTab, setActiveTab] = useState<'REGISTRY' | 'MONITORING' | 'SIMULATION'>('REGISTRY');
   const [records, setRecords] = useState<RentalRecord[]>([]);
   const [properties, setProperties] = useState<Property[]>([]);
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const [theme, setTheme] = useState<'DEFAULT' | 'NEON'>('DEFAULT');
+
+  // Ricevute & Notifiche
+  const [selectedReceipt, setSelectedReceipt] = useState<RentReceipt | null>(null);
+  const [receiptTenant, setReceiptTenant] = useState<Tenant | undefined>(undefined);
+  const [sendingReminderPropId, setSendingReminderPropId] = useState<string | null>(null);
+  const [actionFeedback, setActionFeedback] = useState<{ id: string; success: boolean; message: string } | null>(null);
 
   // Monitoraggio dinamico del cambio tema
   useEffect(() => {
@@ -70,6 +80,114 @@ export const RentalManager: React.FC = () => {
     setRecords((r || []).sort((a, b) => new Date(b.transactionDate).getTime() - new Date(a.transactionDate).getTime()));
     setProperties(p || []);
     setTenants(t || []);
+  };
+
+  // Calcolo dinamico dello stato dei canoni per ciascun immobile a reddito
+  const rentStatusList: RentStatusItem[] = useMemo(() => {
+    return properties
+      .filter(p => p.status === 'RENTED' || (p.financials?.monthlyRent || 0) > 0 || Boolean(p.currentTenantId))
+      .map(p => {
+        const tenant = tenants.find(t => t.id === p.currentTenantId);
+        return calculateRentStatus(p, tenant, records);
+      });
+  }, [properties, tenants, records]);
+
+  const handleSendReminder = async (item: RentStatusItem) => {
+    setSendingReminderPropId(item.propertyId);
+    setActionFeedback(null);
+    try {
+      const res = await notificationService.sendReminder(item.propertyId, 'ALL');
+      if (res.success) {
+        setActionFeedback({
+          id: item.propertyId,
+          success: true,
+          message: `Promemoria inviato con successo a: ${res.sentTo.join(', ')}`
+        });
+      } else {
+        setActionFeedback({
+          id: item.propertyId,
+          success: false,
+          message: res.error || 'Nessun canale di notifica attivo o configurato.'
+        });
+      }
+    } catch (e: any) {
+      setActionFeedback({
+        id: item.propertyId,
+        success: false,
+        message: e.message || 'Errore durante l\'invio del promemoria.'
+      });
+    } finally {
+      setSendingReminderPropId(null);
+    }
+  };
+
+  const handleGenerateReceipt = async (item: RentStatusItem) => {
+    const prop = properties.find(p => p.id === item.propertyId);
+    const tenant = tenants.find(t => t.id === item.tenantId);
+    const existingReceipts = await db.getReceipts();
+    
+    const curYear = item.periodYear || new Date().getFullYear();
+    const curMonth = item.periodMonth !== undefined ? item.periodMonth : new Date().getMonth();
+
+    const matchingRecord = records.find(r => 
+      r.propertyId === item.propertyId && 
+      Number(r.year) === curYear && 
+      Number(r.month) === curMonth
+    );
+
+    const fallbackRecord: RentalRecord = {
+      id: `pmt_${Date.now()}`,
+      propertyId: item.propertyId,
+      year: curYear,
+      month: curMonth,
+      transactionDate: item.paidDate || new Date().toISOString().split('T')[0],
+      income: item.paidAmount || item.monthlyRent,
+      mortgage: 0,
+      condo: 0,
+      utilities: 0,
+      internet: 0,
+      maintenance: 0,
+      taxes: 0,
+      other: 0,
+      isTaxable: true
+    };
+
+    const receipt = createRentReceipt({
+      existingReceipts,
+      landlord: null,
+      tenant,
+      property: prop,
+      paymentRecord: matchingRecord || fallbackRecord,
+      competencePeriod: `${MONTHS[curMonth]} ${curYear}`,
+      taxRegime: prop?.financials?.taxRegime === 'ESENTE_0' ? 'ESENTE' : (prop?.financials?.taxRegime === 'IRPEF_ORDINARIA' ? 'ORDINARIO' : 'CEDOLARE_SECCA')
+    });
+
+    await db.saveReceipt(receipt);
+    setReceiptTenant(tenant);
+    setSelectedReceipt(receipt);
+  };
+
+  const handleOpenRecordReceipt = async (rec: RentalRecord) => {
+    const prop = properties.find(p => p.id === rec.propertyId);
+    const tenant = tenants.find(t => t.id === rec.tenantId || t.id === prop?.currentTenantId);
+    const existingReceipts = await db.getReceipts();
+    
+    let receipt = existingReceipts.find(r => r.paymentRecordId === rec.id);
+    if (!receipt) {
+      const recMonth = rec.month !== undefined ? rec.month : new Date(rec.transactionDate).getMonth();
+      const recYear = rec.year || new Date(rec.transactionDate).getFullYear();
+      receipt = createRentReceipt({
+        existingReceipts,
+        tenant,
+        property: prop,
+        paymentRecord: rec,
+        competencePeriod: `${MONTHS[recMonth]} ${recYear}`,
+        taxRegime: prop?.financials?.taxRegime === 'ESENTE_0' ? 'ESENTE' : (prop?.financials?.taxRegime === 'IRPEF_ORDINARIA' ? 'ORDINARIO' : 'CEDOLARE_SECCA')
+      });
+      await db.saveReceipt(receipt);
+    }
+    setReceiptTenant(tenant);
+    setSelectedReceipt(receipt);
   };
 
   const handlePropertySelect = (propId: string) => {
@@ -238,6 +356,24 @@ export const RentalManager: React.FC = () => {
                  </span>
                </button>
                <button 
+                 onClick={() => setActiveTab('MONITORING')} 
+                 className={`px-6 py-2 rounded-xl text-sm font-bold transition-all ${
+                   activeTab === 'MONITORING' 
+                     ? isNeon 
+                       ? 'bg-brand-500/20 text-brand-400 ring-1 ring-brand-500/50 shadow-soft-card' 
+                       : 'bg-white text-brand-700 shadow-soft-card ring-1 ring-slate-200/30' 
+                     : 'text-slate-500 hover:text-slate-800'
+                 }`}
+               >
+                 <span className="flex items-center gap-1.5">
+                   <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="shrink-0">
+                     <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" />
+                     <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
+                   </svg> 
+                   Scadenze &amp; Quietanza
+                 </span>
+               </button>
+               <button 
                  onClick={() => setActiveTab('SIMULATION')} 
                  className={`px-6 py-2 rounded-xl text-sm font-bold transition-all ${
                    activeTab === 'SIMULATION' 
@@ -349,6 +485,15 @@ export const RentalManager: React.FC = () => {
                                         </div>
                                     </div>
                                     <div className="flex justify-end gap-3 mt-4 opacity-0 group-hover:opacity-100 transition-opacity">
+                                        {rec.income > 0 && (
+                                          <button 
+                                            onClick={() => handleOpenRecordReceipt(rec)} 
+                                            className="text-xs font-bold text-indigo-600 hover:text-indigo-700 flex items-center gap-1 bg-indigo-50 px-2.5 py-1 rounded-lg transition"
+                                            title="Visualizza o scarica la quietanza di pagamento"
+                                          >
+                                            <span>📄</span> Ricevuta
+                                          </button>
+                                        )}
                                         <button onClick={() => { setFormData(rec); setIsFormOpen(true); }} className="text-xs font-bold text-brand-600">Modifica</button>
                                         <button onClick={() => handleDeleteRecord(rec.id)} className="text-xs font-bold text-rose-500">Elimina</button>
                                     </div>
@@ -459,6 +604,132 @@ export const RentalManager: React.FC = () => {
            </div>
        )}
 
+        {activeTab === 'MONITORING' && (
+          <div className="space-y-6 animate-fade-in">
+            {/* Feedback Banner */}
+            {actionFeedback && (
+              <div className={`p-4 rounded-2xl border text-sm flex items-center justify-between shadow-sm animate-fade-in ${
+                actionFeedback.success
+                  ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
+                  : 'bg-rose-500/10 border-rose-500/30 text-rose-300'
+              }`}>
+                <div className="flex items-center gap-2">
+                  <span>{actionFeedback.success ? '✅' : '⚠️'}</span>
+                  <span>{actionFeedback.message}</span>
+                </div>
+                <button onClick={() => setActionFeedback(null)} className="text-slate-400 hover:text-white text-xs">✕</button>
+              </div>
+            )}
+
+            {/* Grid degli Immobili Locati con Stato Pagamento e Azioni Rapide */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {rentStatusList.length === 0 ? (
+                <div className="col-span-2 text-center py-16 text-slate-400 bg-white/5 rounded-3xl border border-slate-700/50">
+                  <p className="text-lg font-bold">Nessun immobile a reddito o locato trovato.</p>
+                  <p className="text-sm mt-1 text-slate-500">Imposta lo status dell'immobile su "Locato" o specifica un canone mensile in Patrimonio.</p>
+                </div>
+              ) : (
+                rentStatusList.map(item => {
+                  const prop = properties.find(p => p.id === item.propertyId);
+                  const isPaid = item.status === 'SALDATO';
+                  const isOverdue = item.status === 'SCADUTO';
+                  const isUpcoming = item.status === 'IN_SCADENZA';
+
+                  return (
+                    <div
+                      key={item.propertyId}
+                      className="bg-slate-900/95 border border-slate-700/80 rounded-3xl p-6 shadow-xl space-y-4 hover:border-indigo-500/40 transition-all group"
+                    >
+                      {/* Top Header */}
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <span className="text-[10px] font-mono uppercase tracking-widest text-indigo-400 font-bold">
+                            Unità a Reddito
+                          </span>
+                          <h3 className="text-lg font-bold text-white mt-0.5">{item.propertyName}</h3>
+                          <p className="text-xs text-slate-400">{prop?.address || '-'}</p>
+                        </div>
+                        {/* Status Badge */}
+                        <div className="text-right">
+                          {isPaid && (
+                            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
+                              <span>✓</span> Saldato
+                            </span>
+                          )}
+                          {isUpcoming && (
+                            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-amber-500/15 text-amber-400 border border-amber-500/30">
+                              <span>⏱️</span> {item.daysUntilDue === 0 ? 'Scade Oggi' : `Scade in ${item.daysUntilDue} gg`}
+                            </span>
+                          )}
+                          {isOverdue && (
+                            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-rose-500/15 text-rose-400 border border-rose-500/30">
+                              <span>⚠️</span> Scaduto ({Math.abs(item.daysUntilDue)} gg fa)
+                            </span>
+                          )}
+                          {!isPaid && !isUpcoming && !isOverdue && (
+                            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-slate-500/15 text-slate-300 border border-slate-500/30">
+                              <span>📅</span> Programmato
+                            </span>
+                          )}
+                          <p className="text-[10px] text-slate-500 mt-1 font-mono">
+                            Scadenza: {item.dueDate}
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* Middle Details Grid */}
+                      <div className="grid grid-cols-2 gap-3 p-3 bg-slate-800/40 rounded-2xl border border-slate-700/50 text-xs">
+                        <div>
+                          <span className="text-slate-400 block text-[10px] uppercase font-semibold">Conduttore / Inquilino</span>
+                          <span className="font-bold text-slate-200">{item.tenantName || 'Non assegnato'}</span>
+                          {item.tenantTelegramChatId && (
+                            <span className="text-sky-400 text-[10px] block mt-0.5 flex items-center gap-1 font-mono">
+                              <span>✈️</span> Chat ID: {item.tenantTelegramChatId}
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-right">
+                          <span className="text-slate-400 block text-[10px] uppercase font-semibold">Canone Pattuito</span>
+                          <span className="font-black text-white text-base">€ {item.monthlyRent.toFixed(2)}</span>
+                          <span className="text-slate-500 text-[10px] block">/ mese (giorno {item.rentDueDay})</span>
+                        </div>
+                      </div>
+
+                      {/* Action Buttons */}
+                      <div className="flex flex-wrap items-center justify-end gap-2 pt-2 border-t border-slate-800">
+                        {/* Reminder Button */}
+                        <button
+                          onClick={() => handleSendReminder(item)}
+                          disabled={isPaid || sendingReminderPropId === item.propertyId}
+                          title={isPaid ? 'Canone già saldato per questo mese' : 'Invia promemoria Telegram e Home Assistant'}
+                          className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${
+                            isPaid
+                              ? 'bg-slate-800 text-slate-500 cursor-not-allowed'
+                              : 'bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/30 shadow-sm'
+                          }`}
+                        >
+                          <span>{sendingReminderPropId === item.propertyId ? '⏳' : '🔔'}</span>
+                          <span>{sendingReminderPropId === item.propertyId ? 'Invio in corso…' : 'Invia Promemoria'}</span>
+                        </button>
+
+                        {/* Generate / View Receipt Button */}
+                        <button
+                          onClick={() => handleGenerateReceipt(item)}
+                          className="px-3.5 py-1.5 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-500 text-white transition flex items-center gap-1.5 shadow-md shadow-indigo-600/20"
+                          title="Genera o visualizza la quietanza fiscale con numerazione progressiva"
+                        >
+                          <span>📄</span>
+                          <span>Quietanza / Ricevuta</span>
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        )}
+
        {activeTab === 'SIMULATION' && (
            <div className="max-w-4xl mx-auto bg-white p-10 rounded-[2.5rem] shadow-soft border border-slate-100">
                <div className="text-center mb-10">
@@ -553,6 +824,15 @@ export const RentalManager: React.FC = () => {
                </div>
            </div>
        )}
+
+        {/* Modal Anteprima e Invio Ricevute */}
+        {selectedReceipt && (
+          <RentReceiptModal
+            receipt={selectedReceipt}
+            tenant={receiptTenant}
+            onClose={() => setSelectedReceipt(null)}
+          />
+        )}
     </div>
   );
 };
