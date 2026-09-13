@@ -37,8 +37,9 @@ function calculateDaysUntilDue(dueDate, referenceDate) {
   return Math.round(diffMs / (1e3 * 60 * 60 * 24));
 }
 function resolveRentDueDay(property, tenant) {
-  if (tenant?.rentDueDay && tenant.rentDueDay >= 1 && tenant.rentDueDay <= 31) {
-    return Math.floor(tenant.rentDueDay);
+  const actualTenant = Array.isArray(tenant) ? tenant.find((t) => t.id === property.currentTenantId) : tenant;
+  if (actualTenant?.rentDueDay && actualTenant.rentDueDay >= 1 && actualTenant.rentDueDay <= 31) {
+    return Math.floor(actualTenant.rentDueDay);
   }
   if (property.financials?.rentDueDay && property.financials.rentDueDay >= 1 && property.financials.rentDueDay <= 31) {
     return Math.floor(property.financials.rentDueDay);
@@ -65,7 +66,7 @@ function getRentDueDate(propOrYear, tenantOrMonth, yearOrDueDay, month) {
     return calculateDueDate(year, m, dueDay);
   } else {
     const property = propOrYear;
-    const tenant = typeof tenantOrMonth === "object" ? tenantOrMonth : void 0;
+    const tenant = typeof tenantOrMonth === "object" && tenantOrMonth !== null ? tenantOrMonth : void 0;
     const y = typeof yearOrDueDay === "number" ? yearOrDueDay : (/* @__PURE__ */ new Date()).getFullYear();
     const m = typeof month === "number" ? month : (/* @__PURE__ */ new Date()).getMonth();
     const dueDay = resolveRentDueDay(property, tenant);
@@ -83,7 +84,7 @@ function calculateRentStatus(firstArg, tenantArg, recordsArg, yearArg, monthArg,
   if ("property" in firstArg) {
     const p = firstArg;
     property = p.property;
-    tenant = p.tenant;
+    tenant = Array.isArray(p.tenant) ? p.tenant.find((t) => t.id === property.currentTenantId) : p.tenant;
     rentalRecords = p.rentalRecords || [];
     const now = p.referenceDate ? p.referenceDate instanceof Date ? p.referenceDate : new Date(p.referenceDate) : /* @__PURE__ */ new Date();
     year = p.year !== void 0 ? p.year : now.getFullYear();
@@ -92,7 +93,7 @@ function calculateRentStatus(firstArg, tenantArg, recordsArg, yearArg, monthArg,
     reminderAdvanceDays = p.reminderAdvanceDays !== void 0 ? p.reminderAdvanceDays : 5;
   } else {
     property = firstArg;
-    tenant = tenantArg;
+    tenant = Array.isArray(tenantArg) ? tenantArg.find((t) => t.id === property.currentTenantId) : tenantArg;
     rentalRecords = recordsArg || [];
     const now = refDateArg ? refDateArg instanceof Date ? refDateArg : new Date(refDateArg) : /* @__PURE__ */ new Date();
     year = yearArg !== void 0 ? yearArg : now.getFullYear();

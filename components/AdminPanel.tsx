@@ -287,7 +287,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     setTimeout(() => setCopyFeedback(false), 2500);
   };
 
-  const scrollToSection = (sectionId: string, sectionKey: 'all' | 'users' | 'config' | 'ha' | 'logs') => {
+  const scrollToSection = (sectionId: string, sectionKey: 'all' | 'users' | 'config' | 'ha' | 'notifications' | 'logs') => {
     setActiveSection(sectionKey);
     const elem = document.getElementById(sectionId);
     if (elem) {
@@ -445,6 +445,13 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                 onClick={() => scrollToSection('sec-ha-danger', 'ha')}
               >
                 Home Assistant
+              </button>
+              <button
+                type="button"
+                className={`ipb-pill ${activeSection === 'notifications' ? 'active' : ''}`}
+                onClick={() => scrollToSection('sec-notifications', 'notifications')}
+              >
+                Automazioni & Notifiche
               </button>
               <button
                 type="button"

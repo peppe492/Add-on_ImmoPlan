@@ -7,7 +7,8 @@ const http = require('http');
 
 const app = express();
 const PORT = process.env.PORT || 9301;
-const DB_FILE = process.env.DB_PATH || '/data/immoplan_data.json';
+let DB_FILE = process.env.DB_PATH || (fs.existsSync('/data') ? '/data/immoplan_data.json' : path.join(__dirname, 'data', 'immoplan_data.json'));
+app.setDbPath = (newPath) => { DB_FILE = newPath; process.env.DB_PATH = newPath; };
 const SUPERVISOR_TOKEN = process.env.SUPERVISOR_TOKEN || process.env.HASSIO_TOKEN; 
 
 // --- GESTIONE CONFIGURAZIONE ---
@@ -136,12 +137,39 @@ app.post('/api/log', (req, res) => {
   }
 });
 
+// --- DEFAULT NOTIFICATION SETTINGS & HELPERS ---
+const DEFAULT_NOTIF_SETTINGS = {
+  reminderAdvanceDays: 5,
+  autoCheckEnabled: true,
+  homeAssistant: {
+    enabled: true,
+    updateSensors: true,
+    persistentNotifications: true,
+    sensorEntityId: 'sensor.immoplan_affitti_stato'
+  },
+  telegram: {
+    enabled: false,
+    botToken: '',
+    ownerChatId: '',
+    notifyOwnerOnDue: true,
+    notifyTenantOnDue: true,
+    autoSendReceiptToTenant: true
+  }
+};
+
+function escapeTgHtml(text) {
+  if (!text) return '';
+  return String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
 // --- HELPER PER INVIO A HOME ASSISTANT ---
 const updateHASensor = async (entityIdSuffix, state, attributes = {}) => {
-  if (!SUPERVISOR_TOKEN) return false;
+  const token = SUPERVISOR_TOKEN || process.env.SUPERVISOR_TOKEN;
+  if (!token) return false;
   
   const entityId = `sensor.immoplan_${entityIdSuffix}`;
-  const url = `http://supervisor/core/api/states/${entityId}`;
+  const supervisorBase = (process.env.SUPERVISOR_URL || 'http://supervisor').replace(/\/$/, '');
+  const url = `${supervisorBase}/core/api/states/${entityId}`;
   
   const payload = {
     state: String(state),
@@ -156,7 +184,7 @@ const updateHASensor = async (entityIdSuffix, state, attributes = {}) => {
     const response = await fetch(url, {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${SUPERVISOR_TOKEN}`,
+        'Authorization': `Bearer ${token}`,
         'Content-Type': 'application/json'
       },
       body: JSON.stringify(payload)
@@ -167,6 +195,109 @@ const updateHASensor = async (entityIdSuffix, state, attributes = {}) => {
     return false;
   }
 };
+
+/**
+ * Authentic Home Assistant Sensor Updater: sensor.immoplan_affitti_stato
+ * Computes aggregate rent statuses across all leased properties.
+ */
+async function updateAffittiStatoSensor(dbData) {
+  if (!dbData) return { success: false, error: 'Database non valido o assente' };
+
+  const properties = dbData.properties || [];
+  const tenants = dbData.tenants || [];
+  const rentalRecords = dbData.rentalRecords || [];
+  const settings = dbData.notificationSettings || DEFAULT_NOTIF_SETTINGS;
+  const advanceDays = settings.reminderAdvanceDays !== undefined ? settings.reminderAdvanceDays : 5;
+
+  const now = new Date();
+  const currentYear = now.getFullYear();
+  const currentMonth = now.getMonth();
+  const todayUtc = Date.UTC(currentYear, currentMonth, now.getDate());
+
+  const tenantMap = new Map(tenants.map(t => [t.id, t]));
+  const rentedProperties = properties.filter(p => {
+    const monthlyRent = Number(p.financials?.monthlyRent) || 0;
+    const isRented = p.status === 'RENTED' || Boolean(p.currentTenantId) || (p.status !== 'EMPTY' && p.status !== 'MAIN_RESIDENCE');
+    return monthlyRent > 0 && isRented;
+  });
+
+  let scaduti = 0;
+  let inScadenza = 0;
+  let saldati = 0;
+  const dettagli = [];
+
+  for (const prop of rentedProperties) {
+    const tenant = prop.currentTenantId ? tenantMap.get(prop.currentTenantId) : undefined;
+    let dueDay = 5;
+    if (tenant && typeof tenant.rentDueDay === 'number' && tenant.rentDueDay >= 1 && tenant.rentDueDay <= 31) {
+      dueDay = Math.floor(tenant.rentDueDay);
+    } else if (prop.financials && typeof prop.financials.rentDueDay === 'number' && prop.financials.rentDueDay >= 1 && prop.financials.rentDueDay <= 31) {
+      dueDay = Math.floor(prop.financials.rentDueDay);
+    } else if (typeof prop.rentDueDay === 'number' && prop.rentDueDay >= 1 && prop.rentDueDay <= 31) {
+      dueDay = Math.floor(prop.rentDueDay);
+    }
+
+    const maxDays = new Date(Date.UTC(currentYear, currentMonth + 1, 0)).getUTCDate();
+    const clampedDay = Math.min(dueDay, maxDays);
+    const dueDateStr = `${currentYear}-${String(currentMonth + 1).padStart(2, '0')}-${String(clampedDay).padStart(2, '0')}`;
+    const dueUtc = Date.UTC(currentYear, currentMonth, clampedDay);
+    const daysUntilDue = Math.round((dueUtc - todayUtc) / (1000 * 60 * 60 * 24));
+
+    const monthlyRent = Number(prop.financials?.monthlyRent) || 0;
+    const matching = rentalRecords.filter(r =>
+      r.propertyId === prop.id &&
+      Number(r.year) === currentYear &&
+      Number(r.month) === currentMonth
+    );
+    const totalPaid = matching.reduce((sum, r) => sum + (Number(r.income) || 0), 0);
+    const isPaid = totalPaid >= monthlyRent;
+
+    let itemStatus;
+    if (isPaid) {
+      itemStatus = 'SALDATO';
+      saldati++;
+    } else if (daysUntilDue < 0) {
+      itemStatus = 'SCADUTO';
+      scaduti++;
+    } else if (daysUntilDue <= advanceDays) {
+      itemStatus = 'IN_SCADENZA';
+      inScadenza++;
+    } else {
+      itemStatus = 'PROGRAMMATO';
+    }
+
+    dettagli.push({
+      propertyId: prop.id,
+      property: prop.name,
+      propertyName: prop.name,
+      tenantName: tenant?.name || 'Conduttore',
+      monthlyRent,
+      paidAmount: totalPaid,
+      daysUntilDue,
+      daysOverdue: daysUntilDue < 0 ? Math.abs(daysUntilDue) : 0,
+      dueDate: dueDateStr,
+      status: itemStatus
+    });
+  }
+
+  const totale_canoni = rentedProperties.length;
+  const state = String(scaduti);
+  const attributes = {
+    friendly_name: 'Stato Canoni di Locazione',
+    totale_canoni,
+    scaduti,
+    in_scadenza: inScadenza,
+    saldati,
+    dettagli,
+    status_label: scaduti > 0 ? 'in_ritardo' : (inScadenza > 0 ? 'in_scadenza' : 'ok'),
+    unit_of_measurement: 'canoni',
+    icon: scaduti > 0 ? 'mdi:alert-circle' : 'mdi:check-circle'
+  };
+
+  const success = await updateHASensor('affitti_stato', state, attributes);
+  return { success, state, attributes };
+}
+
 
 // --- LOGICA CALCOLO SENSORI ---
 app.post('/api/ha/push_sensors', async (req, res) => {
@@ -373,10 +504,28 @@ app.post('/api/ha/push_sensors', async (req, res) => {
       }
     }
 
-    res.json({ success: true, updated: updatedCount, failed: failedCount });
+    // Aggiorna anche il sensore di stato canoni di locazione (sensor.immoplan_affitti_stato)
+    const rentSensorRes = await updateAffittiStatoSensor(dbData);
+    if (rentSensorRes?.success) updatedCount++; else failedCount++;
+
+    res.json({ success: true, updated: updatedCount, failed: failedCount, rentSensor: rentSensorRes });
 
   } catch (e) {
     console.error("Sensor Sync Error:", e);
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// Dedicated endpoint to push rent sensor state and attributes to Home Assistant
+app.post('/api/ha/push_rent_sensor', async (req, res) => {
+  if (!fs.existsSync(DB_FILE)) {
+    return res.status(404).json({ success: false, error: "Database not found" });
+  }
+  try {
+    const dbData = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
+    const result = await updateAffittiStatoSensor(dbData);
+    res.json({ success: true, ...result });
+  } catch (e) {
     res.status(500).json({ success: false, error: e.message });
   }
 });
@@ -585,13 +734,17 @@ let lastNotificationDate = '';
 // Controllo Scadenze ogni ora
 setInterval(async () => {
   try {
-    if (!SUPERVISOR_TOKEN || !fs.existsSync(DB_FILE)) return;
+    if (!fs.existsSync(DB_FILE)) return;
     
+    const dbData = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
+    const settings = dbData.notificationSettings || DEFAULT_NOTIF_SETTINGS;
+    if (settings.autoCheckEnabled === false) return;
+    if (!SUPERVISOR_TOKEN && !(settings.telegram?.enabled && settings.telegram?.botToken)) return;
+
     const now = new Date();
     const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
     if (lastNotificationDate === today) return; // Già notificato oggi
 
-    const dbData = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
     let deadlines = dbData.deadlines || [];
     const properties = dbData.properties || [];
     const rentalRecords = dbData.rentalRecords || [];
@@ -827,12 +980,22 @@ setInterval(async () => {
       }
     });
     
+    const reminderAdvanceDays = settings.reminderAdvanceDays !== undefined ? settings.reminderAdvanceDays : 5;
+    const advanceLimitDate = new Date(now.getTime() + reminderAdvanceDays * 24 * 60 * 60 * 1000)
+      .toISOString().split('T')[0];
+
     const pending = deadlines.filter(d => {
       if (d.isCompleted) return false;
-      if (d.date > today) return false;
+
+      const isRent = d.type === 'RENT' || (d.id && d.id.startsWith('auto_rent_'));
+      if (isRent) {
+        if (d.date > advanceLimitDate) return false;
+      } else {
+        if (d.date > today) return false;
+      }
 
       // Controllo difensivo per canoni di affitto
-      if (d.type === 'RENT' || (d.id && d.id.startsWith('auto_rent_'))) {
+      if (isRent) {
         const parts = (d.date || '').split('-');
         if (parts.length >= 2) {
           const dYear = parseInt(parts[0], 10);
@@ -849,65 +1012,99 @@ setInterval(async () => {
       }
       return true;
     });
-    
+
+    // Dismiss persistent notifications for paid rents
+    properties.forEach(prop => {
+      const matching = rentalRecords.filter(r =>
+        r.propertyId === prop.id &&
+        Number(r.year) === currentYear &&
+        Number(r.month) === currentMonth
+      );
+      const totalPaid = matching.reduce((sum, r) => sum + (Number(r.income) || 0), 0);
+      const monthlyRent = Number(prop.financials?.monthlyRent) || 0;
+      if (monthlyRent > 0 && totalPaid >= monthlyRent && SUPERVISOR_TOKEN) {
+        fetch(`http://supervisor/core/api/services/persistent_notification/dismiss`, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${SUPERVISOR_TOKEN}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ notification_id: `immoplan_reminder_${prop.id}` })
+        }).catch(() => {});
+      }
+    });
+
+    // Telegram reminders in background cron loop
+    if (settings.telegram?.enabled && settings.telegram?.botToken) {
+      const rentDeadlines = pending.filter(d => d.type === 'RENT' || (d.id && d.id.startsWith('auto_rent_')));
+      for (const d of rentDeadlines) {
+        const prop = properties.find(p => p.id === d.propertyId);
+        const tenant = tenants.find(t => t.id === (d.tenantId || prop?.currentTenantId));
+        const propName = escapeTgHtml(prop ? prop.name : 'Immobile');
+        const tenantName = escapeTgHtml(tenant ? tenant.name : 'Conduttore');
+        const rentAmount = Number(d.amount) || (prop?.financials?.monthlyRent || 0);
+
+        const isOverdue = d.date < today;
+        const statusHeader = isOverdue ? '⚠️ <b>ImmoPlan · Canone Scaduto</b>' : '🔔 <b>ImmoPlan · Promemoria Canone</b>';
+        const msgText = isOverdue
+          ? `Gentile ${tenantName}, il canone di locazione di <b>€ ${rentAmount.toFixed(2)}</b> per l'immobile <b>${propName}</b> risultava in scadenza il <b>${d.date}</b> ed è attualmente in ritardo.`
+          : `Gentile ${tenantName}, ti ricordiamo la scadenza del canone di locazione di <b>€ ${rentAmount.toFixed(2)}</b> per l'immobile <b>${propName}</b> prevista per il <b>${d.date}</b>.`;
+
+        if (settings.telegram.notifyTenantOnDue && tenant?.telegramChatId) {
+          await sendTelegramText(settings.telegram.botToken, tenant.telegramChatId, `${statusHeader}\n\n${msgText}`);
+        }
+        if (settings.telegram.notifyOwnerOnDue && settings.telegram.ownerChatId) {
+          const ownerMsg = `Promemoria per ${propName} (${tenantName}): € ${rentAmount.toFixed(2)} (Scadenza: ${d.date}, Stato: ${isOverdue ? 'SCADUTO' : 'IN SCADENZA'})`;
+          await sendTelegramText(settings.telegram.botToken, settings.telegram.ownerChatId, `${statusHeader}\n\n${ownerMsg}`);
+        }
+      }
+    }
+
     if (pending.length > 0) {
       console.log(`[SYSTEM] Trovate ${pending.length} scadenze pendenti. Invio eventi ad HA.`);
       
-      // 1. Notifica persistente nella UI di Home Assistant
-      let message = "Hai delle scadenze in sospeso:\n";
-      pending.forEach(d => { message += `- **${d.title}** (Scadenza: ${d.date}) - €${d.amount || 0}\n`; });
-      
-      await fetch(`http://supervisor/core/api/services/persistent_notification/create`, {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${SUPERVISOR_TOKEN}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: "🚨 ImmoPlan: Scadenze", message, notification_id: "immoplan_deadlines" })
-      });
-
-      // 2. Lancia un evento custom su HA per ogni scadenza (utile per Automazioni e notifiche push)
-      for (const d of pending) {
-        await fetch(`http://supervisor/core/api/events/immoplan_deadline_due`, {
+      if (SUPERVISOR_TOKEN && settings.homeAssistant?.persistentNotifications !== false) {
+        // 1. Notifica persistente nella UI di Home Assistant
+        let message = "Hai delle scadenze in sospeso:\n";
+        pending.forEach(d => { message += `- **${d.title}** (Scadenza: ${d.date}) - €${d.amount || 0}\n`; });
+        
+        await fetch(`http://supervisor/core/api/services/persistent_notification/create`, {
           method: 'POST',
           headers: { 'Authorization': `Bearer ${SUPERVISOR_TOKEN}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ id: d.id, title: d.title, date: d.date, type: d.type, amount: d.amount || 0 })
-        });
+          body: JSON.stringify({ title: "🚨 ImmoPlan: Scadenze", message, notification_id: "immoplan_deadlines" })
+        }).catch(() => {});
+      }
+
+      if (SUPERVISOR_TOKEN) {
+        // 2. Lancia un evento custom su HA per ogni scadenza (utile per Automazioni e notifiche push)
+        for (const d of pending) {
+          await fetch(`http://supervisor/core/api/events/immoplan_deadline_due`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${SUPERVISOR_TOKEN}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: d.id, title: d.title, date: d.date, type: d.type, amount: d.amount || 0 })
+          }).catch(() => {});
+        }
       }
       
       lastNotificationDate = today;
     } else {
-      // Chiudi eventuale notifica persistente se tutto è pagato
-      await fetch(`http://supervisor/core/api/services/persistent_notification/dismiss`, {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${SUPERVISOR_TOKEN}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ notification_id: "immoplan_deadlines" })
-      }).catch(()=>{});
+      if (SUPERVISOR_TOKEN) {
+        // Chiudi eventuale notifica persistente se tutto è pagato
+        await fetch(`http://supervisor/core/api/services/persistent_notification/dismiss`, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${SUPERVISOR_TOKEN}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ notification_id: "immoplan_deadlines" })
+        }).catch(() => {});
+      }
     }
+
+    // Aggiorna sempre il sensore Home Assistant sensor.immoplan_affitti_stato
+    await updateAffittiStatoSensor(dbData);
+  } catch (e) {
+    console.error('[CRON] Errore controllo scadenze:', e);
+  }
+}, 60 * 60 * 1000);
+
 // ========================================================
 // NOTIFICHE & AUTOMAZIONI AFFITTO (TELEGRAM & HOME ASSISTANT)
 // ========================================================
-
-const DEFAULT_NOTIF_SETTINGS = {
-  reminderAdvanceDays: 5,
-  autoCheckEnabled: true,
-  homeAssistant: {
-    enabled: true,
-    updateSensors: true,
-    persistentNotifications: true,
-    sensorEntityId: 'sensor.immoplan_affitti_stato'
-  },
-  telegram: {
-    enabled: false,
-    botToken: '',
-    ownerChatId: '',
-    notifyOwnerOnDue: true,
-    notifyTenantOnDue: true,
-    autoSendReceiptToTenant: true
-  }
-};
-
-function escapeTgHtml(text) {
-  if (!text) return '';
-  return String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
 
 async function sendTelegramText(botToken, chatId, text) {
   if (!botToken || !chatId) return { success: false, error: 'Token o Chat ID mancante' };
@@ -933,6 +1130,7 @@ async function sendTelegramDoc(botToken, chatId, pdfBuffer, filename, caption = 
     const formData = new FormData();
     formData.append('chat_id', String(chatId));
     formData.append('caption', caption);
+    formData.append('parse_mode', 'HTML');
     const blob = new Blob([pdfBuffer], { type: 'application/pdf' });
     formData.append('document', blob, filename || 'quietanza.pdf');
 
@@ -1114,7 +1312,10 @@ app.post('/api/notifications/send-reminder', async (req, res) => {
     const sentTo = [];
 
     const rentAmount = prop.financials?.monthlyRent || 0;
-    const msgText = customMessage || `Gentile ${tenant?.name || 'Conduttore'}, ti ricordiamo la scadenza del canone di locazione di <b>€ ${rentAmount.toFixed(2)}</b> per l'immobile <b>${prop.name}</b>. Ti ringraziamo per la puntualità!`;
+    const safeTenantName = escapeTgHtml(tenant?.name || 'Conduttore');
+    const safePropName = escapeTgHtml(prop.name || 'Immobile');
+    const safeCustomMsg = customMessage ? escapeTgHtml(customMessage) : null;
+    const msgText = safeCustomMsg || `Gentile ${safeTenantName}, ti ricordiamo la scadenza del canone di locazione di <b>€ ${rentAmount.toFixed(2)}</b> per l'immobile <b>${safePropName}</b>. Ti ringraziamo per la puntualità!`;
 
     // 1. Telegram
     if (channel === 'ALL' || channel === 'TELEGRAM') {
@@ -1169,7 +1370,7 @@ app.post('/api/notifications/send-reminder', async (req, res) => {
 app.post('/api/notifications/send-receipt', async (req, res) => {
   try {
     const { receipt, recipientChatId } = req.body || {};
-    if (!receipt) return res.status(400).json({ success: false, error: 'Dati ricevuta mancanti' });
+    if (!receipt) return res.status(400).json({ success: false, message: 'Dati ricevuta mancanti' });
 
     let dbData = {};
     if (fs.existsSync(DB_FILE)) dbData = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
@@ -1182,8 +1383,10 @@ app.post('/api/notifications/send-receipt', async (req, res) => {
     }
 
     const pdfBuf = buildPdfBuffer(receipt);
-    const filename = `Ricevuta_${(receipt.formattedNumber || 'quietanza').replace('/', '_')}.pdf`;
-    const caption = `📄 <b>Quietanza di Pagamento N. ${receipt.formattedNumber}</b>\nImmobile: <b>${receipt.propertyName}</b>\nImporto saldato: <b>€ ${(receipt.totalAmount || 0).toFixed(2)}</b>`;
+    const safeNumber = escapeTgHtml(receipt.formattedNumber || 'quietanza');
+    const safePropName = escapeTgHtml(receipt.propertyName || '-');
+    const filename = `Ricevuta_${safeNumber.replace('/', '_')}.pdf`;
+    const caption = `📄 <b>Quietanza di Pagamento N. ${safeNumber}</b>\nImmobile: <b>${safePropName}</b>\nImporto saldato: <b>€ ${(receipt.totalAmount || 0).toFixed(2)}</b>`;
 
     const docRes = await sendTelegramDoc(botToken, targetChat, pdfBuf, filename, caption);
     if (!docRes.success) {
@@ -1242,6 +1445,19 @@ app.get('*', (req, res) => {
 });
 
 // CRITICO: Ascoltare su 0.0.0.0 è obbligatorio per Docker/Home Assistant Add-ons
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`[SYSTEM] Server in ascolto su http://0.0.0.0:${PORT}`);
-});
+let serverInstance;
+if (process.env.NODE_ENV !== 'test' && require.main === module) {
+  serverInstance = app.listen(PORT, '0.0.0.0', () => {
+    console.log(`[SYSTEM] Server in ascolto su http://0.0.0.0:${PORT}`);
+  });
+}
+
+module.exports = app;
+module.exports.app = app;
+module.exports.server = serverInstance;
+module.exports.updateAffittiStatoSensor = updateAffittiStatoSensor;
+module.exports.escapeTgHtml = escapeTgHtml;
+module.exports.buildPdfBuffer = buildPdfBuffer;
+module.exports.sendTelegramText = sendTelegramText;
+module.exports.sendTelegramDoc = sendTelegramDoc;
+
