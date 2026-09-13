@@ -81,6 +81,22 @@ app.post('/api/log', (req, res) => {
     const message = log.message || '';
     const time = log.time || new Date().toLocaleTimeString();
     console.log(`[CLIENT] [${time}] [${type.toUpperCase()}] ${message}`);
+
+    if (fs.existsSync(DB_FILE)) {
+      try {
+        const dbData = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
+        if (!dbData.systemLogs) dbData.systemLogs = [];
+        dbData.systemLogs.unshift({
+          id: log.id || Date.now(),
+          message,
+          type,
+          time
+        });
+        if (dbData.systemLogs.length > 100) dbData.systemLogs = dbData.systemLogs.slice(0, 100);
+        fs.writeFileSync(DB_FILE, JSON.stringify(dbData, null, 2), 'utf8');
+      } catch (err) {}
+    }
+
     res.json({ success: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -466,6 +482,15 @@ app.post('/api/forecast/run-batch', (req, res) => {
         lastSimulatedAt: new Date().toISOString()
       };
     });
+
+    if (!dbData.systemLogs) dbData.systemLogs = [];
+    dbData.systemLogs.unshift({
+      id: Date.now(),
+      message: `[OpenData / Batch] Ricalcolate previsioni a 10 anni con parametri ISTAT e OMI per ${properties.length} immobili`,
+      type: 'success',
+      time: new Date().toLocaleTimeString()
+    });
+    if (dbData.systemLogs.length > 100) dbData.systemLogs = dbData.systemLogs.slice(0, 100);
 
     fs.writeFileSync(DB_FILE, JSON.stringify(dbData, null, 2), 'utf8');
     res.json({ success: true, count: properties.length, timestamp: new Date().toISOString() });

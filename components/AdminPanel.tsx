@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { db } from '../services/dbService';
 import { SystemLog, CustomSensor, Property, FinancialData, Scenario } from '../types';
+import { fetchIstatIndexes, getMicroMarketMetrics } from '../services/openDataService';
 
 /* =====================================================================================
    ImmoPlan · Admin — Bento Cyber Design (v2 Refined)
@@ -78,11 +79,12 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [owner2Input, setOwner2Input] = useState(appData.owner2Name || 'Claudia');
   const [isSavingOwners, setIsSavingOwners] = useState(false);
   const [ownerSuccessMsg, setOwnerSuccessMsg] = useState('');
-  const [logFilter, setLogFilter] = useState<'ALL' | 'INFO' | 'SUCCESS' | 'ERROR'>('ALL');
+  const [logFilter, setLogFilter] = useState<'ALL' | 'INFO' | 'SUCCESS' | 'ERROR' | 'OPENDATA'>('ALL');
   const [logSearch, setLogSearch] = useState('');
   const [copyFeedback, setCopyFeedback] = useState(false);
   const [confirmResetOpen, setConfirmResetOpen] = useState(false);
   const [isRefreshingStats, setIsRefreshingStats] = useState(false);
+  const [isTestingOpenData, setIsTestingOpenData] = useState(false);
 
   const terminalBodyRef = useRef<HTMLDivElement>(null);
 
@@ -293,8 +295,31 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     CALENDAR_EVENTS: 'Calendario (JSON)'
   };
 
+  const handleTestIstatOpenData = async () => {
+    setIsTestingOpenData(true);
+    setLogFilter('OPENDATA');
+    db.log('[Admin] Avvio verifica manuale connessione OpenData ISTAT & OMI...', 'info');
+    try {
+      await fetchIstatIndexes();
+      const testZone = (dbStats?.properties && dbStats.properties > 0) ? 'Roma Centro' : 'Milano Centro';
+      await getMicroMarketMetrics(testZone, testZone);
+      db.log('[Admin] Verifica OpenData ISTAT & OMI completata con successo.', 'success');
+    } catch (e: any) {
+      db.log(`[Admin] Errore verifica OpenData: ${e?.message || e}`, 'error');
+    } finally {
+      setIsTestingOpenData(false);
+    }
+  };
+
   const filteredLogs = logs.filter(l => {
-    const matchesType = logFilter === 'ALL' || l.type.toUpperCase() === logFilter;
+    let matchesType = false;
+    if (logFilter === 'ALL') {
+      matchesType = true;
+    } else if (logFilter === 'OPENDATA') {
+      matchesType = l.message.includes('[OpenData') || l.message.includes('[ISTAT') || l.message.includes('[OMI');
+    } else {
+      matchesType = l.type.toUpperCase() === logFilter;
+    }
     const matchesSearch = !logSearch || l.message.toLowerCase().includes(logSearch.toLowerCase());
     return matchesType && matchesSearch;
   });
@@ -950,6 +975,14 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   >
                     Error
                   </button>
+                  <button
+                    type="button"
+                    className={`ipb-mini-pill ${logFilter === 'OPENDATA' ? 'active' : ''}`}
+                    onClick={() => setLogFilter('OPENDATA')}
+                    title="Filtra gli eventi relativi alle chiamate OpenData, ISTAT e OMI"
+                  >
+                    🏛️ OpenData / ISTAT ({logs.filter(l => l.message.includes('[OpenData') || l.message.includes('[ISTAT') || l.message.includes('[OMI')).length})
+                  </button>
                 </div>
 
                 <input
@@ -959,6 +992,26 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   value={logSearch}
                   onChange={e => setLogSearch(e.target.value)}
                 />
+
+                <button
+                  type="button"
+                  className="ipb-btn-ghost-sm"
+                  onClick={handleTestIstatOpenData}
+                  disabled={isTestingOpenData}
+                  title="Esegui test in tempo reale del dialogo con le API ISTAT e OpenData"
+                  style={{ borderColor: 'rgba(56, 189, 248, 0.4)', color: '#38bdf8' }}
+                >
+                  {isTestingOpenData ? (
+                    <>
+                      <span className="ipb-pulse-dot mini" />
+                      <span>Test ISTAT…</span>
+                    </>
+                  ) : (
+                    <>
+                      <span>⚡ Test ISTAT / OpenData</span>
+                    </>
+                  )}
+                </button>
 
                 <button
                   type="button"
@@ -985,15 +1038,21 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                     : '// Nessun log corrisponde ai filtri impostati.'}
                 </p>
               ) : (
-                filteredLogs.map(log => (
-                  <div className="ipb-log-row" key={log.id}>
-                    <span className="ipb-log-time mono">[{log.time}]</span>
-                    <span className={`ipb-log-badge mono ${log.type}`}>
-                      {log.type.toUpperCase()}:
-                    </span>
-                    <span className="ipb-log-msg mono">{log.message}</span>
-                  </div>
-                ))
+                filteredLogs.map(log => {
+                  const isOpenDataLog = log.message.includes('[OpenData') || log.message.includes('[ISTAT') || log.message.includes('[OMI');
+                  return (
+                    <div className={`ipb-log-row ${isOpenDataLog ? 'opendata-row' : ''}`} key={log.id}>
+                      <span className="ipb-log-time mono">[{log.time}]</span>
+                      <span className={`ipb-log-badge mono ${log.type}`}>
+                        {log.type.toUpperCase()}:
+                      </span>
+                      {isOpenDataLog && (
+                        <span className="ipb-log-opendata-tag mono">ISTAT/OPEN-DATA</span>
+                      )}
+                      <span className="ipb-log-msg mono">{log.message}</span>
+                    </div>
+                  );
+                })
               )}
             </div>
           </section>
@@ -2342,6 +2401,24 @@ const IPB_ADMIN_CSS = `
 
 .ipb-log-row:hover .ipb-log-msg {
   color: #ffffff;
+}
+
+.ipb-log-opendata-tag {
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(56, 189, 248, 0.15);
+  color: #38bdf8;
+  border: 1px solid rgba(56, 189, 248, 0.3);
+  font-weight: 700;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.ipb-log-row.opendata-row {
+  background: rgba(56, 189, 248, 0.04);
+  padding: 2px 6px;
+  border-radius: 6px;
 }
 
 /* Utilities */

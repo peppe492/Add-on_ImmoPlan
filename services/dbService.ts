@@ -20,10 +20,14 @@ export class ImmoPlanDB {
     } catch (e) {}
   }
 
-  private log(msg: string, type: 'info' | 'error' | 'success' = 'info') {
+  public log(msg: string, type: 'info' | 'error' | 'success' = 'info') {
     const timestamp = new Date().toLocaleTimeString();
-    const logObj: SystemLog = { id: Date.now(), message: msg, type, time: timestamp };
-    this.onLog(msg, type);
+    const logObj: SystemLog = { id: Date.now() + Math.random(), message: msg, type, time: timestamp };
+    if (this.onLog) {
+      this.onLog(msg, type);
+    } else {
+      this.saveLog(logObj).catch(() => {});
+    }
     this.remoteLog(logObj);
   }
 
