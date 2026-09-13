@@ -229,6 +229,8 @@ export interface Property {
     defaultTaxRate: number;
     targetMargin?: number;
     initialInvestment?: number;
+    taxRegime?: 'ESENTE_0' | 'CEDOLARE_10' | 'CEDOLARE_21' | 'IRPEF_ORDINARIA';
+    marginalTaxRate?: number;
   };
   recurringCosts?: RecurringCost[];
   currentTenantId?: string; 

@@ -19,12 +19,14 @@ export const getDefaultSimulationConfig = (property?: Property): ForecastSimulat
     targetEnergyClass: 'A',
     enableEtfBenchmark: true,
     etfAnnualReturn: 7.0,     // 7.0% nominal return for MSCI World ETF
-    taxRegime: property?.financials?.defaultTaxRate === 0
+    taxRegime: property?.financials?.taxRegime || (property?.financials?.defaultTaxRate === 0
       ? 'ESENTE_0'
       : property?.financials?.defaultTaxRate === 10
       ? 'CEDOLARE_10'
-      : 'CEDOLARE_21',
-    ownerMarginalTaxRate: 35
+      : (property?.financials?.defaultTaxRate != null && property.financials.defaultTaxRate !== 21)
+      ? 'IRPEF_ORDINARIA'
+      : 'CEDOLARE_21'),
+    ownerMarginalTaxRate: property?.financials?.marginalTaxRate ?? (property?.financials?.taxRegime === 'IRPEF_ORDINARIA' ? (property?.financials?.defaultTaxRate ?? 35) : 35)
   };
 };
 

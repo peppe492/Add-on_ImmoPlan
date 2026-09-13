@@ -468,7 +468,8 @@ app.post('/api/forecast/run-batch', (req, res) => {
           currentEnergyClass: prop.energyClass || 'D',
           enableEtfBenchmark: true,
           etfAnnualReturn: 7.0,
-          taxRegime: prop.financials?.defaultTaxRate === 0 ? 'ESENTE_0' : (prop.financials?.defaultTaxRate === 10 ? 'CEDOLARE_10' : 'CEDOLARE_21')
+          taxRegime: prop.financials?.taxRegime || (prop.financials?.defaultTaxRate === 0 ? 'ESENTE_0' : (prop.financials?.defaultTaxRate === 10 ? 'CEDOLARE_10' : (prop.financials?.defaultTaxRate === 21 ? 'CEDOLARE_21' : 'IRPEF_ORDINARIA'))),
+          ownerMarginalTaxRate: prop.financials?.marginalTaxRate || 35
         },
         yearlyProjections,
         metrics: {

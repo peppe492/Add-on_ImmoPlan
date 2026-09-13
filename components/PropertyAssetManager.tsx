@@ -252,6 +252,39 @@ export const PropertyAssetManager: React.FC = () => {
       await loadData();
     }
   };
+
+  const handleUpdateTaxRegime = async (
+    regime: 'ESENTE_0' | 'CEDOLARE_10' | 'CEDOLARE_21' | 'IRPEF_ORDINARIA',
+    customMarginalRate?: number,
+    persist: boolean = true
+  ) => {
+    if (!selectedProp) return;
+    const curMarginal = customMarginalRate !== undefined 
+      ? customMarginalRate 
+      : (selectedProp.financials?.marginalTaxRate ?? 23);
+
+    let effectiveTaxRate = 21;
+    if (regime === 'ESENTE_0') effectiveTaxRate = 0;
+    else if (regime === 'CEDOLARE_10') effectiveTaxRate = 10;
+    else if (regime === 'CEDOLARE_21') effectiveTaxRate = 21;
+    else if (regime === 'IRPEF_ORDINARIA') effectiveTaxRate = curMarginal;
+
+    const updatedProp: Property = {
+      ...selectedProp,
+      financials: {
+        ...(selectedProp.financials || { mortgageAmount: 0, condoFees: 0, defaultTaxRate: 21 }),
+        taxRegime: regime,
+        marginalTaxRate: curMarginal,
+        defaultTaxRate: effectiveTaxRate
+      }
+    };
+    setSelectedProp(updatedProp);
+    setProperties(prev => prev.map(p => p.id === updatedProp.id ? updatedProp : p));
+    if (persist) {
+      await db.saveProperty(updatedProp);
+    }
+  };
+
   const calculateMortgageStats = (p: Property) => {
     if (!p.financials?.mortgageAmount || !p.financials?.mortgageDuration || !p.financials?.mortgageStartDate) return null;
     const installment = safeNum(p.financials.mortgageAmount);
@@ -273,22 +306,113 @@ export const PropertyAssetManager: React.FC = () => {
   const filteredCosts = useMemo(() => filterCategory === 'ALL' ? currentCosts : currentCosts.filter(c => c.category === filterCategory), [currentCosts, filterCategory]);
 
   const rentWidgetData = useMemo(() => {
-    if (!selectedProp) return { totalExpenses: 0, suggestedRent: 0, netProfit: 0, estimatedTax: 0, marginPercent: 0, taxRate: 21, fixedExpenses: 0, oneOffExpenses: 0 };
-    let fixedExpenses = 0; const costs = selectedProp.recurringCosts || [];
-    costs.forEach(c => { if (c.frequency === 'MONTHLY') fixedExpenses += safeNum(c.amount); else if (c.frequency === 'YEARLY') fixedExpenses += safeNum(c.amount) / 12; });
-    if (!costs.some(c => c.category === 'MORTGAGE') && selectedProp.financials?.mortgageAmount) fixedExpenses += safeNum(selectedProp.financials.mortgageAmount);
-    let oneOffExpenses = 0; const twelveMonthsAgo = new Date(); twelveMonthsAgo.setFullYear(twelveMonthsAgo.getFullYear() - 1);
+    if (!selectedProp) return {
+      totalExpenses: 0,
+      mortgageMonthly: 0,
+      operatingExpenses: 0,
+      suggestedRent: 0,
+      netProfit: 0,
+      estimatedTax: 0,
+      marginPercent: 0,
+      taxRate: 21,
+      taxRegime: 'CEDOLARE_21' as 'ESENTE_0' | 'CEDOLARE_10' | 'CEDOLARE_21' | 'IRPEF_ORDINARIA',
+      marginalTaxRate: 23,
+      fixedExpenses: 0,
+      oneOffExpenses: 0,
+      suggestedMortgageBase: 0,
+      suggestedExpensesBase: 0,
+      baseRentShare: 0,
+      expensesShare: 0
+    };
+
+    let fixedExpenses = 0;
+    const costs = selectedProp.recurringCosts || [];
+    costs.forEach(c => {
+      if (c.frequency === 'MONTHLY') fixedExpenses += safeNum(c.amount);
+      else if (c.frequency === 'YEARLY') fixedExpenses += safeNum(c.amount) / 12;
+    });
+    if (!costs.some(c => c.category === 'MORTGAGE') && selectedProp.financials?.mortgageAmount) {
+      fixedExpenses += safeNum(selectedProp.financials.mortgageAmount);
+    }
+
+    let oneOffExpenses = 0;
+    const twelveMonthsAgo = new Date();
+    twelveMonthsAgo.setFullYear(twelveMonthsAgo.getFullYear() - 1);
     let totalOneOffInLastYear = 0;
-    costs.filter(c => c.frequency === 'ONE_OFF' && c.date).forEach(c => { if (new Date(c.date!) >= twelveMonthsAgo) totalOneOffInLastYear += safeNum(c.amount); });
+    costs.filter(c => c.frequency === 'ONE_OFF' && c.date).forEach(c => {
+      if (new Date(c.date!) >= twelveMonthsAgo) totalOneOffInLastYear += safeNum(c.amount);
+    });
     oneOffExpenses = totalOneOffInLastYear / 12;
     const totalExpenses = fixedExpenses + oneOffExpenses;
+
+    // Mutuo mensile isolato dalle altre spese
+    let mortgageMonthly = 0;
+    const mortgageCosts = costs.filter(c => c.category === 'MORTGAGE');
+    if (mortgageCosts.length > 0) {
+      mortgageCosts.forEach(c => {
+        if (c.frequency === 'MONTHLY') mortgageMonthly += safeNum(c.amount);
+        else if (c.frequency === 'YEARLY') mortgageMonthly += safeNum(c.amount) / 12;
+      });
+    } else if (selectedProp.financials?.mortgageAmount) {
+      mortgageMonthly = safeNum(selectedProp.financials.mortgageAmount);
+    }
+    const operatingExpenses = Math.max(0, totalExpenses - mortgageMonthly);
+
     const marginPercent = selectedProp.financials?.targetMargin || 0;
-    const taxRate = selectedProp.financials?.defaultTaxRate !== undefined ? selectedProp.financials.defaultTaxRate : 21;
+
+    // Determinazione regime fiscale e aliquota
+    let taxRegime: 'ESENTE_0' | 'CEDOLARE_10' | 'CEDOLARE_21' | 'IRPEF_ORDINARIA' = selectedProp.financials?.taxRegime || 'CEDOLARE_21';
+    let marginalTaxRate = selectedProp.financials?.marginalTaxRate ?? 23;
+    let taxRate = 21;
+
+    if (selectedProp.financials?.taxRegime) {
+      taxRegime = selectedProp.financials.taxRegime;
+      if (taxRegime === 'ESENTE_0') taxRate = 0;
+      else if (taxRegime === 'CEDOLARE_10') taxRate = 10;
+      else if (taxRegime === 'CEDOLARE_21') taxRate = 21;
+      else if (taxRegime === 'IRPEF_ORDINARIA') taxRate = marginalTaxRate;
+    } else if (selectedProp.financials?.defaultTaxRate !== undefined) {
+      const dRate = selectedProp.financials.defaultTaxRate;
+      taxRate = dRate;
+      if (dRate === 0) taxRegime = 'ESENTE_0';
+      else if (dRate === 10) taxRegime = 'CEDOLARE_10';
+      else if (dRate === 21) taxRegime = 'CEDOLARE_21';
+      else {
+        taxRegime = 'IRPEF_ORDINARIA';
+        marginalTaxRate = dRate;
+      }
+    }
+
     const desiredNetIncome = totalExpenses * (1 + (marginPercent / 100));
     const suggestedRent = taxRate < 100 ? desiredNetIncome / (1 - (taxRate / 100)) : 0;
     const estimatedTax = suggestedRent * (taxRate / 100);
     const netProfit = suggestedRent - estimatedTax - totalExpenses;
-    return { totalExpenses, suggestedRent, netProfit, estimatedTax, marginPercent, taxRate, fixedExpenses, oneOffExpenses };
+
+    const mortgageWeight = totalExpenses > 0 ? mortgageMonthly / totalExpenses : (mortgageMonthly > 0 ? 1 : 0);
+    const expensesWeight = totalExpenses > 0 ? operatingExpenses / totalExpenses : 0;
+    const suggestedMortgageBase = suggestedRent * mortgageWeight;
+    const suggestedExpensesBase = suggestedRent * expensesWeight;
+    const baseRentShare = mortgageMonthly + netProfit;
+    const expensesShare = operatingExpenses + estimatedTax;
+
+    return {
+      totalExpenses,
+      mortgageMonthly,
+      operatingExpenses,
+      suggestedRent,
+      netProfit,
+      estimatedTax,
+      marginPercent,
+      taxRate,
+      taxRegime,
+      marginalTaxRate,
+      fixedExpenses,
+      oneOffExpenses,
+      suggestedMortgageBase,
+      suggestedExpensesBase,
+      baseRentShare,
+      expensesShare
+    };
   }, [selectedProp]);
   const yieldData = useMemo(() => {
     if (!selectedProp) return { grossCapRate: 0, netCapRate: 0, cashOnCash: 0, annualRent: 0, noi: 0, leveredCashFlow: 0, initialCash: 0 };
@@ -446,7 +570,11 @@ export const PropertyAssetManager: React.FC = () => {
                             type="button"
                             className={`badge ${p.financials?.defaultTaxRate === 0 ? 'bg-emerald-600 text-white' : 'bg-slate-700 text-slate-300'}`}
                             style={{ fontSize: '10px', padding: '2px 6px', cursor: 'pointer', borderRadius: '4px', border: 'none' }}
-                            onClick={() => setSelectedProp({ ...p, financials: { ...(p.financials || { mortgageAmount: 0, condoFees: 0, defaultTaxRate: 0 }), defaultTaxRate: 0 } })}
+                            onClick={() => {
+                              const upd = { ...p, financials: { ...(p.financials || { mortgageAmount: 0, condoFees: 0, defaultTaxRate: 0 }), defaultTaxRate: 0, taxRegime: 'ESENTE_0' as const } };
+                              setSelectedProp(upd);
+                              setProperties(prev => prev.map(item => item.id === upd.id ? upd : item));
+                            }}
                             title="Comodato d'uso o canone esente (0% IRPEF/Cedolare)"
                           >
                             0% Comodato
@@ -455,7 +583,11 @@ export const PropertyAssetManager: React.FC = () => {
                             type="button"
                             className={`badge ${p.financials?.defaultTaxRate === 10 ? 'bg-indigo-600 text-white' : 'bg-slate-700 text-slate-300'}`}
                             style={{ fontSize: '10px', padding: '2px 6px', cursor: 'pointer', borderRadius: '4px', border: 'none' }}
-                            onClick={() => setSelectedProp({ ...p, financials: { ...(p.financials || { mortgageAmount: 0, condoFees: 0, defaultTaxRate: 10 }), defaultTaxRate: 10 } })}
+                            onClick={() => {
+                              const upd = { ...p, financials: { ...(p.financials || { mortgageAmount: 0, condoFees: 0, defaultTaxRate: 10 }), defaultTaxRate: 10, taxRegime: 'CEDOLARE_10' as const } };
+                              setSelectedProp(upd);
+                              setProperties(prev => prev.map(item => item.id === upd.id ? upd : item));
+                            }}
                             title="Canone concordato (10%)"
                           >
                             10%
@@ -464,15 +596,43 @@ export const PropertyAssetManager: React.FC = () => {
                             type="button"
                             className={`badge ${p.financials?.defaultTaxRate === 21 ? 'bg-indigo-600 text-white' : 'bg-slate-700 text-slate-300'}`}
                             style={{ fontSize: '10px', padding: '2px 6px', cursor: 'pointer', borderRadius: '4px', border: 'none' }}
-                            onClick={() => setSelectedProp({ ...p, financials: { ...(p.financials || { mortgageAmount: 0, condoFees: 0, defaultTaxRate: 21 }), defaultTaxRate: 21 } })}
+                            onClick={() => {
+                              const upd = { ...p, financials: { ...(p.financials || { mortgageAmount: 0, condoFees: 0, defaultTaxRate: 21 }), defaultTaxRate: 21, taxRegime: 'CEDOLARE_21' as const } };
+                              setSelectedProp(upd);
+                              setProperties(prev => prev.map(item => item.id === upd.id ? upd : item));
+                            }}
                             title="Cedolare secca ordinaria (21%)"
                           >
                             21%
                           </button>
+                          <button
+                            type="button"
+                            className={`badge ${p.financials?.taxRegime === 'IRPEF_ORDINARIA' ? 'bg-amber-600 text-white' : 'bg-slate-700 text-slate-300'}`}
+                            style={{ fontSize: '10px', padding: '2px 6px', cursor: 'pointer', borderRadius: '4px', border: 'none' }}
+                            onClick={() => {
+                              const marginal = p.financials?.marginalTaxRate ?? 23;
+                              const upd = { ...p, financials: { ...(p.financials || { mortgageAmount: 0, condoFees: 0, defaultTaxRate: 21 }), defaultTaxRate: marginal, taxRegime: 'IRPEF_ORDINARIA' as const, marginalTaxRate: marginal } };
+                              setSelectedProp(upd);
+                              setProperties(prev => prev.map(item => item.id === upd.id ? upd : item));
+                            }}
+                            title="IRPEF Ordinaria"
+                          >
+                            IRPEF
+                          </button>
                         </div>
                       </div>
                       <input className="input mono" type="number" min="0" max="100" step="0.5" value={p.financials?.defaultTaxRate ?? ''} 
-                        onChange={e => setSelectedProp({ ...p, financials: { ...(p.financials || { mortgageAmount: 0, condoFees: 0, defaultTaxRate: 21 }), defaultTaxRate: e.target.value === '' ? 0 : parseFloat(e.target.value) } })} 
+                        onChange={e => {
+                          const val = e.target.value === '' ? 0 : parseFloat(e.target.value);
+                          let reg: 'ESENTE_0' | 'CEDOLARE_10' | 'CEDOLARE_21' | 'IRPEF_ORDINARIA' = 'CEDOLARE_21';
+                          if (val === 0) reg = 'ESENTE_0';
+                          else if (val === 10) reg = 'CEDOLARE_10';
+                          else if (val === 21) reg = 'CEDOLARE_21';
+                          else reg = 'IRPEF_ORDINARIA';
+                          const upd = { ...p, financials: { ...(p.financials || { mortgageAmount: 0, condoFees: 0, defaultTaxRate: 21 }), defaultTaxRate: val, taxRegime: reg, marginalTaxRate: reg === 'IRPEF_ORDINARIA' ? val : (p.financials?.marginalTaxRate ?? 23) } };
+                          setSelectedProp(upd);
+                          setProperties(prev => prev.map(item => item.id === upd.id ? upd : item));
+                        }} 
                         placeholder="Es. 0 o 21" />
                     </div>
                   </div>
@@ -622,17 +782,269 @@ export const PropertyAssetManager: React.FC = () => {
           <div className="econside">
             <div className="rentw">
               <div className="glow" />
-              <div className="rhead"><span className="zap">{ic(PATH.zap, 16, 2.2)}</span><span className="micro accent">Ottimizzazione Affitto</span></div>
-              <div className="rline"><div><div className="rl1">Spese Totali Stimate</div>{rentWidgetData.oneOffExpenses > 0 && <div className="rl2">Fisse € {Math.round(rentWidgetData.fixedExpenses)}/m · Var. € {Math.round(rentWidgetData.oneOffExpenses)}/m</div>}</div><span className="num">{eur(rentWidgetData.totalExpenses)}<span className="per">/m</span></span></div>
-              <div className="rline"><div className="rl1">Margine Target</div>
+              <div className="rhead">
+                <span className="zap">{ic(PATH.zap, 16, 2.2)}</span>
+                <span className="micro accent">Ottimizzazione Affitto</span>
+              </div>
+
+              {/* Selettore Regime Fiscale */}
+              <div style={{ marginBottom: '14px' }}>
+                <div className="micro accent" style={{ marginBottom: '8px', fontSize: '9.5px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span>Regime Fiscale di Default</span>
+                  <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', fontWeight: 600, color: 'var(--dim)' }}>
+                    Aliquota: {rentWidgetData.taxRate}%
+                  </span>
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '6px' }}>
+                  {/* 🟢 0% - Comodato d'uso / Esente */}
+                  <button
+                    type="button"
+                    className={`regime-btn ${rentWidgetData.taxRegime === 'ESENTE_0' ? 'active-esente' : ''}`}
+                    onClick={() => handleUpdateTaxRegime('ESENTE_0')}
+                    title="0% - Comodato d'uso / Esente da tassazione"
+                  >
+                    <span className="regime-dot" style={{ background: '#10b981' }} />
+                    <div className="regime-text">
+                      <span className="regime-val">🟢 0% Esente</span>
+                      <span className="regime-sub">Comodato d'uso</span>
+                    </div>
+                  </button>
+
+                  {/* 🔵 10% - Cedolare Concordata (3+2) */}
+                  <button
+                    type="button"
+                    className={`regime-btn ${rentWidgetData.taxRegime === 'CEDOLARE_10' ? 'active-concordata' : ''}`}
+                    onClick={() => handleUpdateTaxRegime('CEDOLARE_10')}
+                    title="10% - Cedolare Concordata (3+2)"
+                  >
+                    <span className="regime-dot" style={{ background: '#3b82f6' }} />
+                    <div className="regime-text">
+                      <span className="regime-val">🔵 10% Concordata</span>
+                      <span className="regime-sub">Cedolare (3+2)</span>
+                    </div>
+                  </button>
+
+                  {/* 🟣 21% - Cedolare Libera (4+4) */}
+                  <button
+                    type="button"
+                    className={`regime-btn ${rentWidgetData.taxRegime === 'CEDOLARE_21' ? 'active-libera' : ''}`}
+                    onClick={() => handleUpdateTaxRegime('CEDOLARE_21')}
+                    title="21% - Cedolare Libera (4+4)"
+                  >
+                    <span className="regime-dot" style={{ background: '#8b5cf6' }} />
+                    <div className="regime-text">
+                      <span className="regime-val">🟣 21% Libera</span>
+                      <span className="regime-sub">Cedolare (4+4)</span>
+                    </div>
+                  </button>
+
+                  {/* 🟠 IRPEF Ordinaria */}
+                  <button
+                    type="button"
+                    className={`regime-btn ${rentWidgetData.taxRegime === 'IRPEF_ORDINARIA' ? 'active-irpef' : ''}`}
+                    onClick={() => handleUpdateTaxRegime('IRPEF_ORDINARIA')}
+                    title="IRPEF Ordinaria (con aliquota marginale personalizzata)"
+                  >
+                    <span className="regime-dot" style={{ background: '#f97316' }} />
+                    <div className="regime-text">
+                      <span className="regime-val">🟠 {rentWidgetData.marginalTaxRate}% IRPEF</span>
+                      <span className="regime-sub">Ord. Marginale</span>
+                    </div>
+                  </button>
+                </div>
+
+                {/* Scelta Aliquota Marginale Personalizzata per IRPEF Ordinaria */}
+                {rentWidgetData.taxRegime === 'IRPEF_ORDINARIA' && (
+                  <div className="irpef-custom-box">
+                    <div className="irpef-head">
+                      <span style={{ fontWeight: 600 }}>Aliquota Marginale IRPEF:</span>
+                      <div className="irpef-presets">
+                        {[23, 35, 43].map(rate => (
+                          <button
+                            key={rate}
+                            type="button"
+                            className={`irpef-pill ${rentWidgetData.marginalTaxRate === rate ? 'active' : ''}`}
+                            onClick={() => handleUpdateTaxRegime('IRPEF_ORDINARIA', rate, true)}
+                            title={`Aliquota IRPEF ${rate}%`}
+                          >
+                            {rate}%
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="irpef-input-row">
+                      <span className="micro" style={{ fontSize: '9px' }}>Personalizzata:</span>
+                      <div className="irpef-input-wrap">
+                        <input
+                          type="number"
+                          min="0"
+                          max="90"
+                          step="1"
+                          value={rentWidgetData.marginalTaxRate || ''}
+                          onChange={e => {
+                            const val = e.target.value === '' ? 0 : Math.min(95, Math.max(0, parseFloat(e.target.value) || 0));
+                            handleUpdateTaxRegime('IRPEF_ORDINARIA', val, false);
+                          }}
+                          onBlur={() => {
+                            if (selectedProp) db.saveProperty(selectedProp);
+                          }}
+                          className="input mono irpef-input"
+                          placeholder="es. 35"
+                        />
+                        <span className="irpef-pct">%</span>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Parametri Spese e Margine */}
+              <div className="rline">
+                <div>
+                  <div className="rl1">Spese Totali Stimate</div>
+                  {rentWidgetData.oneOffExpenses > 0 && (
+                    <div className="rl2">
+                      Fisse € {Math.round(rentWidgetData.fixedExpenses)}/m · Var. € {Math.round(rentWidgetData.oneOffExpenses)}/m
+                    </div>
+                  )}
+                </div>
+                <span className="num">{eur(rentWidgetData.totalExpenses)}<span className="per">/m</span></span>
+              </div>
+
+              <div className="rline">
+                <div className="rl1">Margine Target Netto</div>
                 <span className="num accent">
-                  <input className="margin-in" type="number" value={selectedProp?.financials?.targetMargin || 0} onChange={e => selectedProp && setSelectedProp({ ...selectedProp, financials: { ...selectedProp.financials!, targetMargin: parseFloat(e.target.value) || 0 } })} />%
+                  <input
+                    className="margin-in"
+                    type="number"
+                    value={selectedProp?.financials?.targetMargin || 0}
+                    onChange={e => {
+                      if (!selectedProp) return;
+                      const val = parseFloat(e.target.value) || 0;
+                      const updated = {
+                        ...selectedProp,
+                        financials: { ...(selectedProp.financials || { mortgageAmount: 0, condoFees: 0, defaultTaxRate: 21 }), targetMargin: val }
+                      };
+                      setSelectedProp(updated);
+                      setProperties(prev => prev.map(p => p.id === updated.id ? updated : p));
+                    }}
+                    onBlur={() => {
+                      if (selectedProp) db.saveProperty(selectedProp);
+                    }}
+                  />%
                 </span>
               </div>
-              <div className="rbig"><div className="micro">Canone Consigliato (netto tasse)</div><div className="n">{eur(rentWidgetData.suggestedRent)}</div></div>
+
+              {/* Canone Consigliato Totale */}
+              <div className="rbig">
+                <div className="micro accent">Canone Consigliato Lordo</div>
+                <div className="n">{eur(rentWidgetData.suggestedRent)}<span style={{ fontSize: '14px', fontWeight: 500, color: 'var(--faint)', marginLeft: '4px' }}>/m</span></div>
+              </div>
+
+              {/* Split del Canone: Canone Base (Mutuo + Utile) vs Quota Spese (Gestione + Tasse) */}
+              <div className="rent-split-hero">
+                <div className="split-badge-item base">
+                  <div className="sbi-top">
+                    <span className="sbi-icon">🏦</span>
+                    <span className="sbi-lbl">Canone Base</span>
+                  </div>
+                  <div className="sbi-val">{eur(rentWidgetData.baseRentShare)}<span className="sbi-per">/m</span></div>
+                  <div className="sbi-sublist">
+                    <div className="sbi-subrow">
+                      <span>Rata Mutuo</span>
+                      <span>{rentWidgetData.mortgageMonthly > 0 ? `${eur(rentWidgetData.mortgageMonthly)}/m` : 'Nessun Mutuo'}</span>
+                    </div>
+                    {rentWidgetData.netProfit > 0 && (
+                      <div className="sbi-subrow">
+                        <span>Margine Netto</span>
+                        <span style={{ color: 'var(--pos)' }}>+{eur(rentWidgetData.netProfit)}/m</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="split-plus">+</div>
+
+                <div className="split-badge-item exp">
+                  <div className="sbi-top">
+                    <span className="sbi-icon">🏢</span>
+                    <span className="sbi-lbl">Quota Spese</span>
+                  </div>
+                  <div className="sbi-val">{eur(rentWidgetData.expensesShare)}<span className="sbi-per">/m</span></div>
+                  <div className="sbi-sublist">
+                    <div className="sbi-subrow">
+                      <span>Gestione & Cond.</span>
+                      <span>{eur(rentWidgetData.operatingExpenses)}/m</span>
+                    </div>
+                    <div className="sbi-subrow">
+                      <span>Tasse ({rentWidgetData.taxRate}%)</span>
+                      <span style={{ color: '#fb923c' }}>{eur(rentWidgetData.estimatedTax)}/m</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Barra proporzionale di composizione del canone */}
+              {rentWidgetData.suggestedRent > 0 && (
+                <div className="rent-split-bar" title="Composizione del Canone Consigliato">
+                  <div 
+                    className="rsb-seg base" 
+                    style={{ width: `${Math.max(0, (rentWidgetData.mortgageMonthly / rentWidgetData.suggestedRent) * 100)}%` }} 
+                    title={`Mutuo: ${eur(rentWidgetData.mortgageMonthly)}/m`} 
+                  />
+                  <div 
+                    className="rsb-seg exp" 
+                    style={{ width: `${Math.max(0, (rentWidgetData.operatingExpenses / rentWidgetData.suggestedRent) * 100)}%` }} 
+                    title={`Spese Gestione: ${eur(rentWidgetData.operatingExpenses)}/m`} 
+                  />
+                  <div 
+                    className="rsb-seg tax" 
+                    style={{ width: `${Math.max(0, (rentWidgetData.estimatedTax / rentWidgetData.suggestedRent) * 100)}%` }} 
+                    title={`Tasse (${rentWidgetData.taxRate}%): ${eur(rentWidgetData.estimatedTax)}/m`} 
+                  />
+                  <div 
+                    className="rsb-seg margin" 
+                    style={{ width: `${Math.max(0, (rentWidgetData.netProfit / rentWidgetData.suggestedRent) * 100)}%` }} 
+                    title={`Margine Netto: ${eur(rentWidgetData.netProfit)}/m`} 
+                  />
+                </div>
+              )}
+
+              {/* Dettaglio Ripartizione Canone Consigliato */}
               <div className="rfoot">
-                <div className="l"><span>Utile Netto Previsto</span><span className="num pos">+{eur(rentWidgetData.netProfit)}/m</span></div>
-                <div className="l"><span>Accantonamento Tasse ({rentWidgetData.taxRate}%)</span><span className="num neg">−{eur(rentWidgetData.estimatedTax)}</span></div>
+                <div className="sectlabel" style={{ marginBottom: '4px', fontSize: '9px' }}>Ripartizione Analitica Canone</div>
+                <div className="l">
+                  <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <span style={{ color: 'var(--indigo)' }}>🏦</span>
+                    <span>Quota Base Copertura Mutuo</span>
+                  </span>
+                  <span className="num">{eur(rentWidgetData.mortgageMonthly)}/m</span>
+                </div>
+                <div className="l">
+                  <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <span style={{ color: 'var(--accent)' }}>🏢</span>
+                    <span>Quota Spese (Condominio / Gestione)</span>
+                  </span>
+                  <span className="num">{eur(rentWidgetData.operatingExpenses)}/m</span>
+                </div>
+                <div className="l">
+                  <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <span style={{ color: '#fb923c' }}>🏛️</span>
+                    <span>Accantonamento Tasse ({rentWidgetData.taxRate}%)</span>
+                  </span>
+                  <span className="num" style={{ color: '#fb923c' }}>+{eur(rentWidgetData.estimatedTax)}/m</span>
+                </div>
+                <div className="l">
+                  <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <span style={{ color: 'var(--pos)' }}>📈</span>
+                    <span>Margine Netto Desiderato (+{rentWidgetData.marginPercent}%)</span>
+                  </span>
+                  <span className="num pos">+{eur(rentWidgetData.netProfit)}/m</span>
+                </div>
+                <div className="l" style={{ borderTop: '1px dashed var(--border-2)', paddingTop: '8px', marginTop: '2px', fontWeight: 600 }}>
+                  <span style={{ color: 'var(--text)' }}>🎯 Totale Canone Consigliato</span>
+                  <span className="num accent" style={{ fontSize: '13px' }}>{eur(rentWidgetData.suggestedRent)}/m</span>
+                </div>
               </div>
             </div>
             <div className="rentw" style={{ marginTop: '16px', border: '1px solid var(--indigo-soft)' }}>
@@ -980,6 +1392,72 @@ const IPB_CSS = `
 .ipb .rbig{ text-align:center; padding:16px 0 4px; } .ipb .rbig .n{ font-family:var(--mono); font-size:30px; font-weight:600; color:var(--accent); margin-top:6px; }
 .ipb .rfoot{ background:var(--inset); border:1px solid var(--border); border-radius:10px; padding:13px 15px; margin-top:14px; display:flex; flex-direction:column; gap:9px; }
 .ipb .rfoot .l{ display:flex; align-items:center; justify-content:space-between; font-size:11px; color:var(--dim); }
+
+.ipb .regime-btn {
+  display: flex; align-items: center; gap: 8px; background: var(--inset); border: 1px solid var(--border);
+  border-radius: var(--r-sm); padding: 7px 9px; cursor: pointer; text-align: left; transition: all 0.18s ease;
+  color: var(--text); width: 100%;
+}
+.ipb .regime-btn:hover { border-color: var(--border-2); background: var(--panel-2); }
+.ipb .regime-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
+.ipb .regime-text { display: flex; flex-direction: column; min-width: 0; }
+.ipb .regime-val { font-family: var(--mono); font-size: 10.5px; font-weight: 700; line-height: 1.2; }
+.ipb .regime-sub { font-size: 8.5px; color: var(--dim); line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ipb .regime-btn.active-esente { background: rgba(16, 185, 129, 0.14); border-color: #10b981; }
+.ipb .regime-btn.active-esente .regime-val { color: #10b981; }
+.ipb .regime-btn.active-concordata { background: rgba(59, 130, 246, 0.14); border-color: #3b82f6; }
+.ipb .regime-btn.active-concordata .regime-val { color: #3b82f6; }
+.ipb .regime-btn.active-libera { background: rgba(139, 92, 246, 0.14); border-color: #8b5cf6; }
+.ipb .regime-btn.active-libera .regime-val { color: #a78bfa; }
+.ipb .regime-btn.active-irpef { background: rgba(249, 115, 22, 0.14); border-color: #f97316; }
+.ipb .regime-btn.active-irpef .regime-val { color: #fb923c; }
+
+.ipb .irpef-custom-box {
+  margin-top: 8px; padding: 10px 12px; background: var(--inset); border: 1px dashed rgba(249, 115, 22, 0.4);
+  border-radius: 9px; display: flex; flex-direction: column; gap: 8px;
+}
+.ipb .irpef-head { display: flex; align-items: center; justify-content: space-between; font-size: 11px; color: var(--dim); }
+.ipb .irpef-presets { display: flex; gap: 5px; }
+.ipb .irpef-pill {
+  border: 1px solid var(--border); background: var(--panel); color: var(--text); font-family: var(--mono);
+  font-size: 10px; font-weight: 600; padding: 3px 7px; border-radius: 5px; cursor: pointer; transition: all 0.15s;
+}
+.ipb .irpef-pill:hover { border-color: #f97316; color: #fb923c; }
+.ipb .irpef-pill.active { background: #f97316; color: #fff; border-color: #f97316; }
+.ipb .irpef-input-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.ipb .irpef-input-wrap { position: relative; display: inline-flex; align-items: center; }
+.ipb .irpef-input { width: 68px; padding: 4px 18px 4px 8px; font-size: 12px; height: 28px; text-align: right; border-color: rgba(249, 115, 22, 0.3); }
+.ipb .irpef-pct { position: absolute; right: 6px; font-family: var(--mono); font-size: 10.5px; color: var(--faint); pointer-events: none; }
+
+.ipb .rent-split-hero {
+  display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 8px; margin: 10px 0 8px;
+  padding: 10px 12px; background: var(--inset); border: 1px solid var(--border-2); border-radius: 12px;
+}
+.ipb .split-badge-item {
+  display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; border-radius: 8px; background: var(--panel);
+  border: 1px solid var(--border);
+}
+.ipb .split-badge-item.base { border-left: 3px solid var(--indigo); }
+.ipb .split-badge-item.exp { border-left: 3px solid var(--accent); }
+.ipb .sbi-top { display: flex; align-items: center; gap: 5px; }
+.ipb .sbi-icon { font-size: 11px; }
+.ipb .sbi-lbl { font-family: var(--mono); font-size: 8.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: var(--dim); }
+.ipb .sbi-val { font-family: var(--mono); font-size: 15px; font-weight: 700; color: var(--text); }
+.ipb .sbi-per { font-size: 10px; color: var(--faint); font-weight: 500; }
+.ipb .sbi-sublist { display: flex; flex-direction: column; gap: 2px; margin-top: 4px; border-top: 1px dashed var(--border-2); padding-top: 4px; }
+.ipb .sbi-subrow { display: flex; justify-content: space-between; align-items: center; font-size: 8.5px; color: var(--dim); }
+.ipb .sbi-subrow span:last-child { font-family: var(--mono); font-weight: 600; color: var(--text); }
+.ipb .split-plus { font-family: var(--mono); font-size: 15px; font-weight: 700; color: var(--faint); display: flex; align-items: center; justify-content: center; }
+
+.ipb .rent-split-bar {
+  display: flex; height: 6px; border-radius: 99px; overflow: hidden; margin: 4px 0 10px;
+  background: var(--inset); border: 1px solid var(--border);
+}
+.ipb .rsb-seg { height: 100%; transition: width 0.25s ease; }
+.ipb .rsb-seg.base { background: var(--indigo); }
+.ipb .rsb-seg.exp { background: var(--accent); }
+.ipb .rsb-seg.tax { background: #fb923c; }
+.ipb .rsb-seg.margin { background: var(--pos); }
 
 /* analisi */
 .ipb .col-head{ align-items:flex-start; }
