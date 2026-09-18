@@ -775,19 +775,260 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
             </div>
           </section>
 
-          {/* =========================================================================
-              RIGA 3: SENSORI HOME ASSISTANT (Span 8) & DANGER ZONE (Span 4)
+                    {/* =========================================================================
+              RIGA 3: AUTOMAZIONI & TELEGRAM (Span 8) + DANGER ZONE (Span 4)
               ========================================================================= */}
-          {/* CARD: SENSORI HOME ASSISTANT */}
-          <section className="ipb-card span-8" id="sec-ha-danger">
+          <section className="ipb-card span-8" id="sec-notifications">
+            <div className="ipb-card-header">
+              <div className="ipb-card-title-group">
+                <div className="ipb-icon-wrap cyan">
+                  <span className="text-base">✈️</span>
+                </div>
+                <div>
+                  <h2 className="ipb-card-title">Scadenziario Canoni & Bot Telegram</h2>
+                  <p className="ipb-card-subtitle">Promemoria automatici e invio quietanze PDF</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                {notifSuccessMsg && (
+                  <span className="text-emerald-400 text-xs font-bold flex items-center gap-1 bg-emerald-500/10 px-3 py-1.5 rounded-xl border border-emerald-500/30">
+                    <span>✓</span> {notifSuccessMsg}
+                  </span>
+                )}
+                <button
+                  type="button"
+                  className="ipb-btn ipb-btn-primary"
+                  onClick={handleSaveNotifs}
+                  disabled={isSavingNotifs}
+                >
+                  {ic(PATH.save, 14)}
+                  <span>{isSavingNotifs ? 'Salvataggio…' : 'Salva Automazioni'}</span>
+                </button>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 p-6">
+              <div className="bg-slate-900/50 p-5 rounded-2xl border border-slate-800 space-y-4">
+                <div className="flex items-center gap-2 text-indigo-400 font-bold text-sm">
+                  <span>⏱️</span>
+                  <span>Parametri Scadenziario</span>
+                </div>
+                <div className="ipb-field">
+                  <label>Anticipo Promemoria Scadenza (Giorni)</label>
+                  <input
+                    type="number"
+                    min="1"
+                    max="30"
+                    className="ipb-input mono"
+                    value={notifSettings.reminderAdvanceDays}
+                    onChange={e => setNotifSettings({ ...notifSettings, reminderAdvanceDays: parseInt(e.target.value) || 5 })}
+                  />
+                  <p className="text-[11px] text-slate-400 mt-1">Giorni prima della scadenza in cui inviare il promemoria (default: 5).</p>
+                </div>
+                <div className="flex items-center justify-between p-3 bg-slate-800/40 rounded-xl border border-slate-700/60">
+                  <div>
+                    <span className="text-xs font-bold text-slate-200 block">Controllo Automatico Attivo</span>
+                    <span className="text-[10px] text-slate-400">Verifica scadenze a ogni avvio e su base oraria</span>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={notifSettings.autoCheckEnabled}
+                    onChange={e => setNotifSettings({ ...notifSettings, autoCheckEnabled: e.target.checked })}
+                    className="w-4 h-4 rounded text-brand-600 cursor-pointer"
+                  />
+                </div>
+              </div>
+
+              
+              </div>
+
+              <div className="bg-slate-900/50 p-5 rounded-2xl border border-slate-800 space-y-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 text-sky-400 font-bold text-sm">
+                    <span>✈️</span>
+                    <span>Bot Telegram</span>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={notifSettings.telegram.enabled}
+                    onChange={e => setNotifSettings({
+                      ...notifSettings,
+                      telegram: { ...notifSettings.telegram, enabled: e.target.checked }
+                    })}
+                    className="w-4 h-4 rounded text-sky-500 cursor-pointer"
+                  />
+                </div>
+
+                <div className="space-y-3">
+                  <div className="ipb-field">
+                    <label>Bot Token Telegram</label>
+                    <div className="relative">
+                      <input
+                        type={showTgToken ? 'text' : 'password'}
+                        placeholder="123456789:ABCdefGHI..."
+                        className="ipb-input mono pr-10"
+                        value={notifSettings.telegram.botToken}
+                        onChange={e => setNotifSettings({
+                          ...notifSettings,
+                          telegram: { ...notifSettings.telegram, botToken: e.target.value }
+                        })}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowTgToken(!showTgToken)}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white text-xs"
+                      >
+                        {showTgToken ? 'Nascondi' : 'Mostra'}
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="ipb-field">
+                    <label>Chat ID Proprietario (Alerts &amp; Quietanze)</label>
+                    <input
+                      type="text"
+                      placeholder="Es. 123456789"
+                      className="ipb-input mono"
+                      value={notifSettings.telegram.ownerChatId}
+                      onChange={e => setNotifSettings({
+                        ...notifSettings,
+                        telegram: { ...notifSettings.telegram, ownerChatId: e.target.value }
+                      })}
+                    />
+                  </div>
+
+                  <div className="space-y-1.5 text-xs text-slate-300">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={notifSettings.telegram.notifyOwnerOnDue}
+                        onChange={e => setNotifSettings({
+                          ...notifSettings,
+                          telegram: { ...notifSettings.telegram, notifyOwnerOnDue: e.target.checked }
+                        })}
+                        className="w-3.5 h-3.5 rounded text-sky-500"
+                      />
+                      <span>Invia alert al proprietario su canoni in scadenza</span>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={notifSettings.telegram.notifyTenantOnDue}
+                        onChange={e => setNotifSettings({
+                          ...notifSettings,
+                          telegram: { ...notifSettings.telegram, notifyTenantOnDue: e.target.checked }
+                        })}
+                        className="w-3.5 h-3.5 rounded text-sky-500"
+                      />
+                      <span>Invia promemoria automatico all'inquilino (se impostato Chat ID)</span>
+                    </label>
+                  </div>
+                </div>
+
+                {tgTestFeedback && (
+                  <div className={`p-2.5 rounded-xl border text-xs ${tgTestFeedback.success ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300' : 'bg-rose-500/10 border-rose-500/30 text-rose-300'}`}>
+                    {tgTestFeedback.message}
+                  </div>
+                )}
+
+                <button
+                  type="button"
+                  onClick={handleTestTelegram}
+                  disabled={isTestingTg}
+                  className="w-full py-2 bg-slate-800 hover:bg-slate-700 text-sky-300 border border-slate-700 rounded-xl text-xs font-bold transition flex items-center justify-center gap-2"
+                >
+                  <span>{isTestingTg ? '⏳' : '⚡'}</span>
+                  <span>{isTestingTg ? 'Verifica Telegram…' : 'Testa Bot Telegram'}</span>
+                </button>
+              
+              </div>
+
+          </section>
+
+          <section className="ipb-card span-4 ipb-danger-card">
+            <div className="ipb-card-header">
+              <div className="ipb-card-title-group">
+                <div className="ipb-icon-wrap rose">
+                  {ic(PATH.warn, 19, 2)}
+                </div>
+                <div>
+                  <h2 className="ipb-card-title text-rose">Manutenzione Critica</h2>
+                  <p className="ipb-card-subtitle">Reset di fabbrica & Ripristino</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="ipb-danger-body">
+              <div className="ipb-danger-callout">
+                <div className="ipb-callout-header">
+                  {ic(PATH.warn, 14, 2)}
+                  <strong>Attenzione: Operazione Irreversibile</strong>
+                </div>
+                <p className="ipb-callout-text">
+                  L'eliminazione cancella l'intero database IndexedDB: immobili, spese, storico fatture 730, scenari di simulazione e configurazione locale.
+                </p>
+              </div>
+
+              {confirmResetOpen && (
+                <div className="ipb-confirm-drawer">
+                  <div className="ipb-confirm-title">
+                    {ic(PATH.shield, 15)}
+                    <span>Confermi l'eliminazione definitiva del database?</span>
+                  </div>
+                  <div className="ipb-confirm-actions">
+                    <button
+                      type="button"
+                      className="ipb-btn ipb-btn-ghost-sm"
+                      onClick={() => setConfirmResetOpen(false)}
+                    >
+                      Annulla
+                    </button>
+                    <button
+                      type="button"
+                      className="ipb-btn ipb-btn-danger"
+                      onClick={() => {
+                        setConfirmResetOpen(false);
+                        onResetDatabase();
+                      }}
+                    >
+                      {ic(PATH.trash, 13)}
+                      <span>Sì, Cancella Tutto</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="ipb-card-footer">
+              {!confirmResetOpen ? (
+                <button
+                  type="button"
+                  className="ipb-btn ipb-btn-danger wide"
+                  onClick={() => setConfirmResetOpen(true)}
+                >
+                  {ic(PATH.trash, 14)}
+                  <span>Elimina Database Locale</span>
+                </button>
+              ) : (
+                <span className="ipb-dim-note text-rose">Conferma richiesta nel riquadro superiore</span>
+              )}
+            </div>
+          </section>
+
+          
+
+          {/* =========================================================================
+              RIGA 4: HOME ASSISTANT (Span 12)
+              ========================================================================= */}
+          <section className="ipb-card span-12" id="sec-ha-danger">
             <div className="ipb-card-header">
               <div className="ipb-card-title-group">
                 <div className="ipb-icon-wrap cyan">
                   {ic(PATH.chip, 19, 2)}
                 </div>
                 <div>
-                  <h2 className="ipb-card-title">Sensori Personalizzati Home Assistant</h2>
-                  <p className="ipb-card-subtitle">Pubblica entità MQTT/REST per dashboard Lovelace e automazioni domotiche</p>
+                  <h2 className="ipb-card-title">Integrazione Home Assistant</h2>
+                  <p className="ipb-card-subtitle">Sensori di stato, notifiche persistenti e telemetria personalizzata</p>
                 </div>
               </div>
               <button
@@ -801,7 +1042,69 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
               </button>
             </div>
 
-            {/* LISTA SENSORI ATTIVI */}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 p-6">
+              <div className="col-span-1">
+                <div className="bg-slate-900/50 p-5 rounded-2xl border border-slate-800 space-y-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 text-sky-400 font-bold text-sm">
+                    <span>🏠</span>
+                    <span>Home Assistant Supervisor</span>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={notifSettings.homeAssistant.enabled}
+                    onChange={e => setNotifSettings({
+                      ...notifSettings,
+                      homeAssistant: { ...notifSettings.homeAssistant, enabled: e.target.checked }
+                    })}
+                    className="w-4 h-4 rounded text-sky-500 cursor-pointer"
+                  />
+                </div>
+                <div className="space-y-2 text-xs text-slate-300">
+                  <div className="flex items-center justify-between p-2.5 bg-slate-800/40 rounded-xl">
+                    <span>Aggiornamento Sensore Stato</span>
+                    <span className="font-mono text-cyan-400 text-[11px]">{notifSettings.homeAssistant.sensorEntityId}</span>
+                  </div>
+                  <div className="flex items-center justify-between p-2.5 bg-slate-800/40 rounded-xl">
+                    <span>Notifiche Persistenti UI</span>
+                    <input
+                      type="checkbox"
+                      checked={notifSettings.homeAssistant.persistentNotifications}
+                      onChange={e => setNotifSettings({
+                        ...notifSettings,
+                        homeAssistant: { ...notifSettings.homeAssistant, persistentNotifications: e.target.checked }
+                      })}
+                      className="w-3.5 h-3.5 rounded text-sky-500 cursor-pointer"
+                    />
+                  </div>
+                </div>
+                {haTestFeedback && (
+                  <div className={`p-2.5 rounded-xl border text-xs ${haTestFeedback.success ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300' : 'bg-rose-500/10 border-rose-500/30 text-rose-300'}`}>
+                    {haTestFeedback.message}
+                  </div>
+                )}
+                <button
+                  type="button"
+                  onClick={handleTestHA}
+                  disabled={isTestingHA}
+                  className="w-full py-2 bg-slate-800 hover:bg-slate-700 text-sky-300 border border-slate-700 rounded-xl text-xs font-bold transition flex items-center justify-center gap-2"
+                >
+                  <span>{isTestingHA ? '⏳' : '⚡'}</span>
+                  <span>{isTestingHA ? 'Verifica in corso…' : 'Testa Connessione HA'}</span>
+                </button>
+              </div>
+
+              
+              </div>
+
+              </div>
+              <div className="col-span-2 space-y-4">
+                <div className="bg-slate-900/50 p-5 rounded-2xl border border-slate-800 h-full">
+                  <div className="flex items-center gap-2 text-cyan-400 font-bold text-sm mb-4">
+                    <span>📡</span>
+                    <span>Sensori Personalizzati</span>
+                  </div>
+                  {/* LISTA SENSORI ATTIVI */}
             <div className="ipb-sensors-container">
               {customSensors.length === 0 ? (
                 <div className="ipb-empty-sensors">
@@ -926,298 +1229,13 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                 </button>
               </div>
             </div>
+          
+                </div>
+              </div>
           </section>
 
-          {/* CARD: AUTOMAZIONI & NOTIFICHE CANONI (Span 12) */}
-          <section className="ipb-card span-12" id="sec-notifications">
-            <div className="ipb-card-header">
-              <div className="ipb-card-title-group">
-                <div className="ipb-icon-wrap cyan">
-                  <span className="text-base">🔔</span>
-                </div>
-                <div>
-                  <h2 className="ipb-card-title">Automazioni &amp; Notifiche Canoni (Telegram &amp; Home Assistant)</h2>
-                  <p className="ipb-card-subtitle">Promemoria scadenze affitti, invio quietanze PDF e sensori di stato</p>
-                </div>
-              </div>
-              <div className="flex items-center gap-2">
-                {notifSuccessMsg && (
-                  <span className="text-emerald-400 text-xs font-bold flex items-center gap-1 bg-emerald-500/10 px-3 py-1.5 rounded-xl border border-emerald-500/30">
-                    <span>✓</span> {notifSuccessMsg}
-                  </span>
-                )}
-                <button
-                  type="button"
-                  className="ipb-btn ipb-btn-primary"
-                  onClick={handleSaveNotifs}
-                  disabled={isSavingNotifs}
-                >
-                  {ic(PATH.save, 14)}
-                  <span>{isSavingNotifs ? 'Salvataggio…' : 'Salva Automazioni'}</span>
-                </button>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 p-6">
-              {/* Colonna 1: Regole Generali Scadenze */}
-              <div className="bg-slate-900/50 p-5 rounded-2xl border border-slate-800 space-y-4">
-                <div className="flex items-center gap-2 text-indigo-400 font-bold text-sm">
-                  <span>⏱️</span>
-                  <span>Parametri Scadenziario</span>
-                </div>
-                <div className="ipb-field">
-                  <label>Anticipo Promemoria Scadenza (Giorni)</label>
-                  <input
-                    type="number"
-                    min="1"
-                    max="30"
-                    className="ipb-input mono"
-                    value={notifSettings.reminderAdvanceDays}
-                    onChange={e => setNotifSettings({ ...notifSettings, reminderAdvanceDays: parseInt(e.target.value) || 5 })}
-                  />
-                  <p className="text-[11px] text-slate-400 mt-1">Giorni prima della scadenza in cui inviare il promemoria (default: 5).</p>
-                </div>
-                <div className="flex items-center justify-between p-3 bg-slate-800/40 rounded-xl border border-slate-700/60">
-                  <div>
-                    <span className="text-xs font-bold text-slate-200 block">Controllo Automatico Attivo</span>
-                    <span className="text-[10px] text-slate-400">Verifica scadenze a ogni avvio e su base oraria</span>
-                  </div>
-                  <input
-                    type="checkbox"
-                    checked={notifSettings.autoCheckEnabled}
-                    onChange={e => setNotifSettings({ ...notifSettings, autoCheckEnabled: e.target.checked })}
-                    className="w-4 h-4 rounded text-brand-600 cursor-pointer"
-                  />
-                </div>
-              </div>
-
-              {/* Colonna 2: Home Assistant Supervisor */}
-              <div className="bg-slate-900/50 p-5 rounded-2xl border border-slate-800 space-y-4">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2 text-sky-400 font-bold text-sm">
-                    <span>🏠</span>
-                    <span>Home Assistant Supervisor</span>
-                  </div>
-                  <input
-                    type="checkbox"
-                    checked={notifSettings.homeAssistant.enabled}
-                    onChange={e => setNotifSettings({
-                      ...notifSettings,
-                      homeAssistant: { ...notifSettings.homeAssistant, enabled: e.target.checked }
-                    })}
-                    className="w-4 h-4 rounded text-sky-500 cursor-pointer"
-                  />
-                </div>
-                <div className="space-y-2 text-xs text-slate-300">
-                  <div className="flex items-center justify-between p-2.5 bg-slate-800/40 rounded-xl">
-                    <span>Aggiornamento Sensore Stato</span>
-                    <span className="font-mono text-cyan-400 text-[11px]">{notifSettings.homeAssistant.sensorEntityId}</span>
-                  </div>
-                  <div className="flex items-center justify-between p-2.5 bg-slate-800/40 rounded-xl">
-                    <span>Notifiche Persistenti UI</span>
-                    <input
-                      type="checkbox"
-                      checked={notifSettings.homeAssistant.persistentNotifications}
-                      onChange={e => setNotifSettings({
-                        ...notifSettings,
-                        homeAssistant: { ...notifSettings.homeAssistant, persistentNotifications: e.target.checked }
-                      })}
-                      className="w-3.5 h-3.5 rounded text-sky-500 cursor-pointer"
-                    />
-                  </div>
-                </div>
-                {haTestFeedback && (
-                  <div className={`p-2.5 rounded-xl border text-xs ${haTestFeedback.success ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300' : 'bg-rose-500/10 border-rose-500/30 text-rose-300'}`}>
-                    {haTestFeedback.message}
-                  </div>
-                )}
-                <button
-                  type="button"
-                  onClick={handleTestHA}
-                  disabled={isTestingHA}
-                  className="w-full py-2 bg-slate-800 hover:bg-slate-700 text-sky-300 border border-slate-700 rounded-xl text-xs font-bold transition flex items-center justify-center gap-2"
-                >
-                  <span>{isTestingHA ? '⏳' : '⚡'}</span>
-                  <span>{isTestingHA ? 'Verifica in corso…' : 'Testa Connessione HA'}</span>
-                </button>
-              </div>
-
-              {/* Colonna 3: Bot Telegram */}
-              <div className="bg-slate-900/50 p-5 rounded-2xl border border-slate-800 space-y-4">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2 text-sky-400 font-bold text-sm">
-                    <span>✈️</span>
-                    <span>Bot Telegram</span>
-                  </div>
-                  <input
-                    type="checkbox"
-                    checked={notifSettings.telegram.enabled}
-                    onChange={e => setNotifSettings({
-                      ...notifSettings,
-                      telegram: { ...notifSettings.telegram, enabled: e.target.checked }
-                    })}
-                    className="w-4 h-4 rounded text-sky-500 cursor-pointer"
-                  />
-                </div>
-
-                <div className="space-y-3">
-                  <div className="ipb-field">
-                    <label>Bot Token Telegram</label>
-                    <div className="relative">
-                      <input
-                        type={showTgToken ? 'text' : 'password'}
-                        placeholder="123456789:ABCdefGHI..."
-                        className="ipb-input mono pr-10"
-                        value={notifSettings.telegram.botToken}
-                        onChange={e => setNotifSettings({
-                          ...notifSettings,
-                          telegram: { ...notifSettings.telegram, botToken: e.target.value }
-                        })}
-                      />
-                      <button
-                        type="button"
-                        onClick={() => setShowTgToken(!showTgToken)}
-                        className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white text-xs"
-                      >
-                        {showTgToken ? 'Nascondi' : 'Mostra'}
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="ipb-field">
-                    <label>Chat ID Proprietario (Alerts &amp; Quietanze)</label>
-                    <input
-                      type="text"
-                      placeholder="Es. 123456789"
-                      className="ipb-input mono"
-                      value={notifSettings.telegram.ownerChatId}
-                      onChange={e => setNotifSettings({
-                        ...notifSettings,
-                        telegram: { ...notifSettings.telegram, ownerChatId: e.target.value }
-                      })}
-                    />
-                  </div>
-
-                  <div className="space-y-1.5 text-xs text-slate-300">
-                    <label className="flex items-center gap-2 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={notifSettings.telegram.notifyOwnerOnDue}
-                        onChange={e => setNotifSettings({
-                          ...notifSettings,
-                          telegram: { ...notifSettings.telegram, notifyOwnerOnDue: e.target.checked }
-                        })}
-                        className="w-3.5 h-3.5 rounded text-sky-500"
-                      />
-                      <span>Invia alert al proprietario su canoni in scadenza</span>
-                    </label>
-                    <label className="flex items-center gap-2 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={notifSettings.telegram.notifyTenantOnDue}
-                        onChange={e => setNotifSettings({
-                          ...notifSettings,
-                          telegram: { ...notifSettings.telegram, notifyTenantOnDue: e.target.checked }
-                        })}
-                        className="w-3.5 h-3.5 rounded text-sky-500"
-                      />
-                      <span>Invia promemoria automatico all'inquilino (se impostato Chat ID)</span>
-                    </label>
-                  </div>
-                </div>
-
-                {tgTestFeedback && (
-                  <div className={`p-2.5 rounded-xl border text-xs ${tgTestFeedback.success ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300' : 'bg-rose-500/10 border-rose-500/30 text-rose-300'}`}>
-                    {tgTestFeedback.message}
-                  </div>
-                )}
-
-                <button
-                  type="button"
-                  onClick={handleTestTelegram}
-                  disabled={isTestingTg}
-                  className="w-full py-2 bg-slate-800 hover:bg-slate-700 text-sky-300 border border-slate-700 rounded-xl text-xs font-bold transition flex items-center justify-center gap-2"
-                >
-                  <span>{isTestingTg ? '⏳' : '⚡'}</span>
-                  <span>{isTestingTg ? 'Verifica Telegram…' : 'Testa Bot Telegram'}</span>
-                </button>
-              </div>
-            </div>
-          </section>
-
-          {/* CARD: MANUTENZIONE CRITICA & RESET (Span 4) */}
-          <section className="ipb-card span-4 ipb-danger-card">
-            <div className="ipb-card-header">
-              <div className="ipb-card-title-group">
-                <div className="ipb-icon-wrap rose">
-                  {ic(PATH.warn, 19, 2)}
-                </div>
-                <div>
-                  <h2 className="ipb-card-title text-rose">Manutenzione Critica</h2>
-                  <p className="ipb-card-subtitle">Reset di fabbrica & Ripristino</p>
-                </div>
-              </div>
-            </div>
-
-            <div className="ipb-danger-body">
-              <div className="ipb-danger-callout">
-                <div className="ipb-callout-header">
-                  {ic(PATH.warn, 14, 2)}
-                  <strong>Attenzione: Operazione Irreversibile</strong>
-                </div>
-                <p className="ipb-callout-text">
-                  L'eliminazione cancella l'intero database IndexedDB: immobili, spese, storico fatture 730, scenari di simulazione e configurazione locale.
-                </p>
-              </div>
-
-              {confirmResetOpen && (
-                <div className="ipb-confirm-drawer">
-                  <div className="ipb-confirm-title">
-                    {ic(PATH.shield, 15)}
-                    <span>Confermi l'eliminazione definitiva del database?</span>
-                  </div>
-                  <div className="ipb-confirm-actions">
-                    <button
-                      type="button"
-                      className="ipb-btn ipb-btn-ghost-sm"
-                      onClick={() => setConfirmResetOpen(false)}
-                    >
-                      Annulla
-                    </button>
-                    <button
-                      type="button"
-                      className="ipb-btn ipb-btn-danger"
-                      onClick={() => {
-                        setConfirmResetOpen(false);
-                        onResetDatabase();
-                      }}
-                    >
-                      {ic(PATH.trash, 13)}
-                      <span>Sì, Cancella Tutto</span>
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            <div className="ipb-card-footer">
-              {!confirmResetOpen ? (
-                <button
-                  type="button"
-                  className="ipb-btn ipb-btn-danger wide"
-                  onClick={() => setConfirmResetOpen(true)}
-                >
-                  {ic(PATH.trash, 14)}
-                  <span>Elimina Database Locale</span>
-                </button>
-              ) : (
-                <span className="ipb-dim-note text-rose">Conferma richiesta nel riquadro superiore</span>
-              )}
-            </div>
-          </section>
-
-          {/* =========================================================================
-              RIGA 4: TERMINALE LOG DI SISTEMA (Span 12 Full Width)
+{/* =========================================================================
+              RIGA 5: TERMINALE LOG DI SISTEMA (Span 12 Full Width)
               ========================================================================= */}
           <section className="ipb-card span-12 ipb-terminal-card" id="sec-logs">
             <div className="ipb-terminal-header">
