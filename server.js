@@ -1107,8 +1107,12 @@ setInterval(async () => {
 // ========================================================
 
 async function sendTelegramText(botToken, chatId, text) {
-  if (!botToken || !chatId) return { success: false, error: 'Token o Chat ID mancante' };
+  if (!botToken || !chatId) {
+    console.error(`[TELEGRAM DEBUG] Errore: Token o Chat ID mancante. ChatId: ${chatId}`);
+    return { success: false, error: 'Token o Chat ID mancante' };
+  }
   try {
+    console.log(`[TELEGRAM DEBUG] Invio messaggio a Chat ID: ${chatId}`);
     const res = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1116,17 +1120,24 @@ async function sendTelegramText(botToken, chatId, text) {
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok || !data.ok) {
+      console.error(`[TELEGRAM DEBUG] Errore API Telegram (Testo): HTTP ${res.status} - Risposta:`, data);
       return { success: false, error: data.description || `HTTP ${res.status}` };
     }
+    console.log(`[TELEGRAM DEBUG] Messaggio inviato con successo, message_id: ${data.result?.message_id}`);
     return { success: true, messageId: data.result?.message_id };
   } catch (err) {
+    console.error(`[TELEGRAM DEBUG] Eccezione di rete o parsing:`, err);
     return { success: false, error: err.message };
   }
 }
 
 async function sendTelegramDoc(botToken, chatId, pdfBuffer, filename, caption = '') {
-  if (!botToken || !chatId || !pdfBuffer) return { success: false, error: 'Parametri documento mancanti' };
+  if (!botToken || !chatId || !pdfBuffer) {
+    console.error(`[TELEGRAM DEBUG] Errore: Parametri documento mancanti. ChatId: ${chatId}`);
+    return { success: false, error: 'Parametri documento mancanti' };
+  }
   try {
+    console.log(`[TELEGRAM DEBUG] Preparazione invio PDF a Chat ID: ${chatId} (${filename})`);
     const formData = new FormData();
     formData.append('chat_id', String(chatId));
     formData.append('caption', caption);
@@ -1140,10 +1151,13 @@ async function sendTelegramDoc(botToken, chatId, pdfBuffer, filename, caption = 
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok || !data.ok) {
+      console.error(`[TELEGRAM DEBUG] Errore API Telegram (Documento): HTTP ${res.status} - Risposta:`, data);
       return { success: false, error: data.description || `HTTP ${res.status}` };
     }
+    console.log(`[TELEGRAM DEBUG] PDF inviato con successo, document_id: ${data.result?.document?.file_id}`);
     return { success: true, documentId: data.result?.document?.file_id };
   } catch (err) {
+    console.error(`[TELEGRAM DEBUG] Eccezione di rete o parsing (Documento):`, err);
     return { success: false, error: err.message };
   }
 }
@@ -1276,23 +1290,34 @@ app.post('/api/notifications/test-telegram', async (req, res) => {
   try {
     const botToken = (req.body?.botToken || '').trim();
     const chatId = req.body?.chatId;
-    if (!botToken) return res.json({ success: false, message: 'Bot Token mancante' });
+    console.log(`[TELEGRAM DEBUG] Ricevuta richiesta di test. BotToken presente: ${!!botToken}, ChatID: ${chatId}`);
+    
+    if (!botToken) {
+      console.error(`[TELEGRAM DEBUG] Test fallito: Bot Token mancante.`);
+      return res.json({ success: false, message: 'Bot Token mancante' });
+    }
 
+    console.log(`[TELEGRAM DEBUG] Esecuzione getMe su API Telegram...`);
     const resp = await fetch(`https://api.telegram.org/bot${botToken}/getMe`);
     const data = await resp.json().catch(() => ({}));
     if (!resp.ok || !data.ok) {
+      console.error(`[TELEGRAM DEBUG] Errore getMe. HTTP ${resp.status} - Risposta:`, data);
       return res.json({ success: false, message: `Errore Telegram: ${data.description || resp.status}` });
     }
+    console.log(`[TELEGRAM DEBUG] getMe convalidato. Bot Username: @${data.result?.username}`);
 
     if (chatId) {
+      console.log(`[TELEGRAM DEBUG] Chat ID fornito. Invio messaggio di test...`);
       const sendRes = await sendTelegramText(botToken, chatId, '🔔 <b>Test Connessione ImmoPlan</b>: Bot Telegram configurato e funzionante!');
       if (!sendRes.success) {
+        console.error(`[TELEGRAM DEBUG] Invio messaggio di test fallito. Dettagli:`, sendRes.error);
         return res.json({ success: false, message: `Bot valido (@${data.result.username}), ma invio messaggio fallito su Chat ID ${chatId}: ${sendRes.error}` });
       }
     }
 
     res.json({ success: true, message: `Connessione riuscita con @${data.result.username}`, botUsername: data.result.username });
   } catch (e) {
+    console.error(`[TELEGRAM DEBUG] Eccezione di rete o server durante test-telegram:`, e);
     res.json({ success: false, message: `Errore connessione Telegram: ${e.message}` });
   }
 });
