@@ -840,7 +840,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
               </div>
 
               
-              </div>
+
 
               <div className="bg-slate-900/50 p-5 rounded-2xl border border-slate-800 space-y-4">
                 <div className="flex items-center justify-between">
@@ -943,6 +943,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
               
               </div>
 
+            </div>
           </section>
 
           {/* =========================================================================
@@ -1023,9 +1024,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
               </div>
 
               
-              </div>
+              
 
-              </div>
+              
               <div className="space-y-4">
                 <div className="bg-slate-900/50 p-5 rounded-2xl border border-slate-800 h-full">
                   <div className="flex items-center gap-2 text-cyan-400 font-bold text-sm mb-4">
@@ -1160,6 +1161,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
           
                 </div>
               </div>
+            </div>
+            </div>
           </section>
 
 <section className="ipb-card span-12 ipb-danger-card">
