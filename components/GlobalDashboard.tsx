@@ -1125,30 +1125,28 @@ export const GlobalDashboard: React.FC<GlobalDashboardProps> = ({ portalTarget }
             <div className="ph">
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                 <h3>{propId === 'ALL' ? 'Entrate vs Uscite' : 'Trend per Categoria'}</h3>
-                {m.hasDeductions && (
-                  <button
-                    type="button"
-                    onClick={() => setIncludeTaxRefunds(!includeTaxRefunds)}
-                    style={{
-                      background: includeTaxRefunds ? 'rgba(168, 85, 247, 0.15)' : 'var(--inset)',
-                      border: `1px solid ${includeTaxRefunds ? 'rgba(168, 85, 247, 0.45)' : 'var(--card-border)'}`,
-                      color: includeTaxRefunds ? '#c084fc' : 'var(--dim)',
-                      borderRadius: '8px',
-                      padding: '2px 8px',
-                      fontSize: '11px',
-                      fontWeight: 600,
-                      cursor: 'pointer',
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: '4px',
-                      transition: 'all 0.2s ease'
-                    }}
-                    title="Includi quote annuali rimborsi fiscali 730 da ristrutturazioni"
-                  >
-                    <span>🧾</span>
-                    <span>730: {includeTaxRefunds ? 'Incluso' : 'Escluso'}</span>
-                  </button>
-                )}
+                <button
+                  type="button"
+                  onClick={() => setIncludeTaxRefunds(!includeTaxRefunds)}
+                  style={{
+                    background: includeTaxRefunds ? 'rgba(168, 85, 247, 0.15)' : 'var(--inset)',
+                    border: `1px solid ${includeTaxRefunds ? 'rgba(168, 85, 247, 0.45)' : 'var(--card-border)'}`,
+                    color: includeTaxRefunds ? '#c084fc' : 'var(--dim)',
+                    borderRadius: '8px',
+                    padding: '2px 8px',
+                    fontSize: '11px',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '4px',
+                    transition: 'all 0.2s ease'
+                  }}
+                  title={m.hasDeductions ? "Includi quote annuali rimborsi fiscali 730 da ristrutturazioni" : "Detrazioni 730: nessuna fattura archiviata nel periodo"}
+                >
+                  <span>🧾</span>
+                  <span>730: {includeTaxRefunds ? (m.hasDeductions ? 'Incluso' : 'Attivo (0€)') : 'Escluso'}</span>
+                </button>
               </div>
               <div className="leg2" style={{ flexWrap: 'wrap', justifyContent: 'flex-end', gap: '8px' }}>
                 {propId === 'ALL' ? (

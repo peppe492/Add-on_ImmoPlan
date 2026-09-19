@@ -186,6 +186,8 @@ export interface ForecastSimulationConfig {
   taxRegime: 'ESENTE_0' | 'CEDOLARE_21' | 'CEDOLARE_10' | 'IRPEF_ORDINARIA';
   ownerMarginalTaxRate?: number; // % (e.g. 35 or 43)
   includeTaxDeductions?: boolean; // toggle to include 10-year 730 tax deductions
+  simulationRenovationCost?: number; // Costo lavori ristrutturazione da simulare (es. 40.000 €)
+  simulationDeductionRate?: number; // % detrazione (50% Bonus Casa, 65% Ecobonus, 36%)
 }
 
 export interface YearlyForecastResult {

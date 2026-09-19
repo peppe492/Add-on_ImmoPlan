@@ -72,7 +72,13 @@ export const MarketForecaster: React.FC<MarketForecasterProps> = ({ property, on
     return getDeductionSummaryForProperty(invoices, property.id);
   }, [invoices, property.id]);
 
-  const hasDeductions = deductionSummary.invoiceCount > 0 && deductionSummary.totalDeduction > 0;
+  const hasRealInvoices = deductionSummary.invoiceCount > 0 && deductionSummary.totalDeduction > 0;
+  const isSimulatingRenovation = !hasRealInvoices && (config.simulationRenovationCost || 0) > 0;
+  const simulatedQuota = isSimulatingRenovation
+    ? (Math.min(config.simulationRenovationCost || 0, 96000) * ((config.simulationDeductionRate || 50) / 100)) / 10
+    : 0;
+  const effectiveQuota = hasRealInvoices ? deductionSummary.currentYearQuota : simulatedQuota;
+  const hasAnyDeduction = hasRealInvoices || isSimulatingRenovation;
 
   useEffect(() => {
     let isMounted = true;
@@ -195,20 +201,22 @@ export const MarketForecaster: React.FC<MarketForecasterProps> = ({ property, on
           <div className="mf-kpi-sub">Capitale composto su cash iniziale</div>
         </div>
 
-        {hasDeductions && (
-          <div className="mf-kpi-card" style={{ borderColor: 'rgba(168, 85, 247, 0.4)', background: 'linear-gradient(180deg, rgba(168, 85, 247, 0.12) 0%, rgba(15, 23, 42, 0.6) 100%)' }}>
-            <div className="mf-kpi-top">
-              <span className="mf-kpi-label" style={{ color: '#c084fc' }}>Recupero Fiscale 730 (10 Rate)</span>
-              <span className="mf-kpi-icon">🧾</span>
-            </div>
-            <div className="mf-kpi-val" style={{ color: '#c084fc' }}>
-              {config.includeTaxDeductions !== false ? `+${eur(deductionSummary.currentYearQuota)}/a` : '€ 0 (Escluse)'}
-            </div>
-            <div className="mf-kpi-sub" style={{ color: '#cbd5e1' }}>
-              Totale detraibile: <strong style={{ color: '#e9d5ff' }}>{eur(deductionSummary.totalDeduction)}</strong>
-            </div>
+        <div className="mf-kpi-card" style={{ borderColor: (config.includeTaxDeductions !== false && effectiveQuota > 0) ? 'rgba(168, 85, 247, 0.45)' : undefined, background: (config.includeTaxDeductions !== false && effectiveQuota > 0) ? 'linear-gradient(180deg, rgba(168, 85, 247, 0.12) 0%, rgba(15, 23, 42, 0.6) 100%)' : undefined }}>
+          <div className="mf-kpi-top">
+            <span className="mf-kpi-label" style={{ color: (config.includeTaxDeductions !== false && effectiveQuota > 0) ? '#c084fc' : undefined }}>Recupero Fiscale 730</span>
+            <span className="mf-kpi-icon">🧾</span>
           </div>
-        )}
+          <div className="mf-kpi-val" style={{ color: (config.includeTaxDeductions !== false && effectiveQuota > 0) ? '#c084fc' : 'var(--dim)' }}>
+            {config.includeTaxDeductions !== false && effectiveQuota > 0 ? `+${eur(effectiveQuota)}/a` : '€ 0'}
+          </div>
+          <div className="mf-kpi-sub" style={{ color: '#cbd5e1' }}>
+            {hasRealInvoices
+              ? `Totale detraibile: ${eur(deductionSummary.totalDeduction)} (${deductionSummary.invoiceCount} fatture)`
+              : isSimulatingRenovation
+                ? `Simulazione: 10 rate su ${eur(config.simulationRenovationCost || 0)}`
+                : '10 rate annuali da lavori'}
+          </div>
+        </div>
       </div>
 
       {/* Main Layout: Control Sliders Left + Chart Right */}
@@ -361,18 +369,23 @@ export const MarketForecaster: React.FC<MarketForecasterProps> = ({ property, on
             </label>
           </div>
 
-          {/* Tax Deductions 730 Toggle */}
-          {hasDeductions && (
-            <div className="mf-toggle-card" style={{ borderColor: config.includeTaxDeductions !== false ? 'rgba(168, 85, 247, 0.45)' : undefined }}>
+          {/* Tax Deductions 730 Control */}
+          <div className="mf-toggle-card" style={{ borderColor: (config.includeTaxDeductions !== false && effectiveQuota > 0) ? 'rgba(168, 85, 247, 0.45)' : undefined, flexDirection: 'column', alignItems: 'stretch', gap: 10 }}>
+            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
               <div className="mf-toggle-info">
-                <span className="mf-toggle-title" style={{ color: config.includeTaxDeductions !== false ? '#c084fc' : undefined }}>
-                  🧾 Detrazioni Ristrutturazione 730 (10 Anni)
+                <span className="mf-toggle-title" style={{ color: '#c084fc', display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span>🧾</span>
+                  <span>Detrazioni Ristrutturazione 730 (10 Anni)</span>
                 </span>
                 <span className="mf-toggle-desc">
-                  Rilevate <strong>{deductionSummary.invoiceCount} fatture</strong> per questo immobile ({eur(deductionSummary.totalEligibleBase)} di spesa detraibile). Quota annuale stimata: <strong style={{ color: '#c084fc' }}>+{eur(deductionSummary.currentYearQuota)}/anno</strong> per 10 anni (Totale recupero IRPEF: {eur(deductionSummary.totalDeduction)}).
+                  {hasRealInvoices ? (
+                    <>Rilevate <strong>{deductionSummary.invoiceCount} fatture</strong> archiviate per questo immobile ({eur(deductionSummary.totalEligibleBase)} di spesa). Quota calcolata: <strong style={{ color: '#c084fc' }}>+{eur(deductionSummary.currentYearQuota)}/anno</strong> per 10 anni.</>
+                  ) : (
+                    <>Simula l'impatto fiscale in 10 rate annuali di futuri lavori di ristrutturazione/ecobonus previsti (es. per Besozzo 14).</>
+                  )}
                 </span>
               </div>
-              <label className="mf-switch">
+              <label className="mf-switch" style={{ flexShrink: 0 }}>
                 <input
                   type="checkbox"
                   checked={config.includeTaxDeductions !== false}
@@ -381,7 +394,42 @@ export const MarketForecaster: React.FC<MarketForecasterProps> = ({ property, on
                 <span className="mf-switch-slider" />
               </label>
             </div>
-          )}
+
+            {!hasRealInvoices && config.includeTaxDeductions !== false && (
+              <div style={{ marginTop: 6, paddingTop: 10, borderTop: '1px dashed rgba(255,255,255,0.08)', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                <div>
+                  <label className="mf-field-label" style={{ fontSize: 10.5, color: '#c084fc' }}>Spesa Lavori Prevista (€)</label>
+                  <input
+                    type="number"
+                    step="1000"
+                    placeholder="Es. 40000"
+                    className="mf-select"
+                    style={{ fontFamily: 'var(--mono)', padding: '6px 8px', fontSize: 11.5 }}
+                    value={config.simulationRenovationCost || ''}
+                    onChange={e => handleConfigChange('simulationRenovationCost', parseFloat(e.target.value) || 0)}
+                  />
+                </div>
+                <div>
+                  <label className="mf-field-label" style={{ fontSize: 10.5, color: '#c084fc' }}>Aliquota Bonus Detrazione</label>
+                  <select
+                    className="mf-select"
+                    style={{ padding: '6px 8px', fontSize: 11.5 }}
+                    value={config.simulationDeductionRate || 50}
+                    onChange={e => handleConfigChange('simulationDeductionRate', parseInt(e.target.value) || 50)}
+                  >
+                    <option value={50}>Bonus Casa 50% (Ristrutturazioni)</option>
+                    <option value={65}>Ecobonus 65% (Efficienza energetica)</option>
+                    <option value={36}>Bonus 36% (Seconda Casa)</option>
+                  </select>
+                </div>
+                {(config.simulationRenovationCost || 0) > 0 && (
+                  <div style={{ gridColumn: 'span 2', fontSize: 11, color: '#c084fc', background: 'rgba(168, 85, 247, 0.1)', padding: '6px 10px', borderRadius: 6, border: '1px solid rgba(168, 85, 247, 0.25)' }}>
+                    Quota calcolata: <strong>+{eur(simulatedQuota)}/anno</strong> per 10 anni (Totale recupero 730: {eur(simulatedQuota * 10)})
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Right Panel: Recharts 4-Curve Chart */}
@@ -465,7 +513,7 @@ export const MarketForecaster: React.FC<MarketForecasterProps> = ({ property, on
                   <th>Equità Netta</th>
                   <th>Debito Mutuo</th>
                   <th>Canone Netto/a</th>
-                  {hasDeductions && <th>Detrazione 730</th>}
+                  <th>Detrazione 730</th>
                   <th>NCF Annuo</th>
                   {config.enableEtfBenchmark && <th>ETF World</th>}
                 </tr>
@@ -482,13 +530,11 @@ export const MarketForecaster: React.FC<MarketForecasterProps> = ({ property, on
                       <td className="mf-td-num mf-accent">{eur(item.accumulatedEquity)}</td>
                       <td className="mf-td-num mf-neg">{eur(item.remainingMortgageDebt)}</td>
                       <td className="mf-td-num">{eur(item.annualNetRent)}</td>
-                      {hasDeductions && (
-                        <td className="mf-td-num" style={{ color: hasYrDeduction ? '#c084fc' : 'var(--dim)' }}>
-                          {config.includeTaxDeductions !== false
-                            ? (hasYrDeduction ? `+${eur(item.taxDeductionQuota || 0)}` : '€ 0 (scaduta)')
-                            : 'Esclusa'}
-                        </td>
-                      )}
+                      <td className="mf-td-num" style={{ color: hasYrDeduction ? '#c084fc' : 'var(--dim)' }}>
+                        {config.includeTaxDeductions !== false
+                          ? (hasYrDeduction ? `+${eur(item.taxDeductionQuota || 0)}` : '€ 0')
+                          : 'Esclusa'}
+                      </td>
                       <td className={`mf-td-num ${item.netCashFlow >= 0 ? 'mf-pos' : 'mf-neg'}`}>
                         {seur(item.netCashFlow)}
                       </td>

@@ -27,7 +27,9 @@ export const getDefaultSimulationConfig = (property?: Property): ForecastSimulat
       ? 'IRPEF_ORDINARIA'
       : 'CEDOLARE_21'),
     ownerMarginalTaxRate: property?.financials?.marginalTaxRate ?? (property?.financials?.taxRegime === 'IRPEF_ORDINARIA' ? (property?.financials?.defaultTaxRate ?? 35) : 35),
-    includeTaxDeductions: true
+    includeTaxDeductions: true,
+    simulationRenovationCost: 0,
+    simulationDeductionRate: 50
   };
 };
 
@@ -234,7 +236,13 @@ export const calculatePropertyForecast = (
     // Net Cash Flow & 730 Tax Deductions Integration
     const currentYear = new Date().getFullYear();
     const simCalendarYear = currentYear + (year - 1);
-    const taxDeductionQuota = (annualTaxDeductions && annualTaxDeductions[simCalendarYear]) ? annualTaxDeductions[simCalendarYear] : 0;
+    let taxDeductionQuota = (annualTaxDeductions && annualTaxDeductions[simCalendarYear]) ? annualTaxDeductions[simCalendarYear] : 0;
+    if (taxDeductionQuota === 0 && (config.simulationRenovationCost || 0) > 0 && year <= 10) {
+      const eligibleBase = Math.min(config.simulationRenovationCost || 0, 96000);
+      const totalDetr = eligibleBase * ((config.simulationDeductionRate || 50) / 100);
+      taxDeductionQuota = totalDetr / 10;
+    }
+
     const netCashFlowWithoutTax = annualNetRent - annualMortgagePayment;
     const effectiveTaxDeduction = config.includeTaxDeductions !== false ? taxDeductionQuota : 0;
     const netCashFlow = netCashFlowWithoutTax + effectiveTaxDeduction;
