@@ -972,7 +972,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-2 gap-6 p-6">
-              <div >
                 <div className="bg-slate-900/50 p-5 rounded-2xl border border-slate-800 space-y-4">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2 text-sky-400 font-bold text-sm">
@@ -1161,7 +1160,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
           
                 </div>
               </div>
-            </div>
             </div>
           </section>
 
