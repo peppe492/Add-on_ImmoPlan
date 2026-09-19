@@ -26,7 +26,8 @@ export const getDefaultSimulationConfig = (property?: Property): ForecastSimulat
       : (property?.financials?.defaultTaxRate != null && property.financials.defaultTaxRate !== 21)
       ? 'IRPEF_ORDINARIA'
       : 'CEDOLARE_21'),
-    ownerMarginalTaxRate: property?.financials?.marginalTaxRate ?? (property?.financials?.taxRegime === 'IRPEF_ORDINARIA' ? (property?.financials?.defaultTaxRate ?? 35) : 35)
+    ownerMarginalTaxRate: property?.financials?.marginalTaxRate ?? (property?.financials?.taxRegime === 'IRPEF_ORDINARIA' ? (property?.financials?.defaultTaxRate ?? 35) : 35),
+    includeTaxDeductions: true
   };
 };
 
@@ -82,7 +83,8 @@ const calculateRemainingMortgageDebt = (
 export const calculatePropertyForecast = (
   property: Property,
   config: ForecastSimulationConfig,
-  customMetrics?: MicroMarketMetrics
+  customMetrics?: MicroMarketMetrics,
+  annualTaxDeductions?: Record<number, number>
 ): PropertyForecastData => {
   const metrics: MicroMarketMetrics = customMetrics || {
     zone: property.address || property.name,
@@ -229,8 +231,14 @@ export const calculatePropertyForecast = (
     );
     const annualMortgagePayment = monthlyMortgagePayment > 0 ? monthlyMortgagePayment * 12 : monthlyInstallment * 12;
 
-    // Net Cash Flow & Equity
-    const netCashFlow = annualNetRent - annualMortgagePayment;
+    // Net Cash Flow & 730 Tax Deductions Integration
+    const currentYear = new Date().getFullYear();
+    const simCalendarYear = currentYear + (year - 1);
+    const taxDeductionQuota = (annualTaxDeductions && annualTaxDeductions[simCalendarYear]) ? annualTaxDeductions[simCalendarYear] : 0;
+    const netCashFlowWithoutTax = annualNetRent - annualMortgagePayment;
+    const effectiveTaxDeduction = config.includeTaxDeductions !== false ? taxDeductionQuota : 0;
+    const netCashFlow = netCashFlowWithoutTax + effectiveTaxDeduction;
+
     cumulativeNetCashFlow += netCashFlow;
     const accumulatedEquity = Math.max(0, propertyValue - remainingDebt);
 
@@ -257,7 +265,9 @@ export const calculatePropertyForecast = (
       accumulatedEquity: Math.round(accumulatedEquity),
       etfWorldBenchmarkValue,
       roePercent,
-      energyPenaltyBonus: Math.round(energyPenaltyBonusVal)
+      energyPenaltyBonus: Math.round(energyPenaltyBonusVal),
+      taxDeductionQuota: Math.round(taxDeductionQuota),
+      netCashFlowWithoutTax: Math.round(netCashFlowWithoutTax)
     });
   }
 

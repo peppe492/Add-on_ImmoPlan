@@ -3,7 +3,8 @@ import { createPortal } from 'react-dom';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { db } from '../services/dbService';
-import { Property, RentalRecord, ValuationRecord } from '../types';
+import { Property, RentalRecord, ValuationRecord, InvoiceRecord } from '../types';
+import { getAnnualDeductionsByProperty, getAnnualDeductionsTotal } from '../services/taxDeductionService';
 
 /* =====================================================================================
    ImmoPlan · Dashboard — "Bento Terminal" (port del prototipo dashboard-bento-filtro)
@@ -353,11 +354,24 @@ function buildAxis(tf: TF, a: Anchor) {
   const labels: string[] = [], seeds: string[] = []; for (let i = 0; i < 12; i++) { labels.push(MA[i]); seeds.push(a.y + '-' + i); }
   return { labels, seeds, n: 12, periodLabel: '' + a.y, refY: a.y, refM: 11 };
 }
-function computeModel(scopeAll: Derived[], tf: TF, propId: string, anchor: Anchor, records: RentalRecord[]) {
+function computeModel(
+  scopeAll: Derived[],
+  tf: TF,
+  propId: string,
+  anchor: Anchor,
+  records: RentalRecord[],
+  invoices: InvoiceRecord[] = [],
+  includeTaxRefunds = true
+) {
   const ax = buildAxis(tf, anchor);
   const scope = propId === 'ALL' ? scopeAll : scopeAll.filter(p => p.id === propId);
   const n = ax.n, growth = GROWTH[tf], factor = FACTOR[tf];
   const vScale = Math.pow(1.006, (ax.refY - NOW.y) * 12 + (ax.refM - NOW.m));
+
+  const deductionSchedule = propId === 'ALL'
+    ? getAnnualDeductionsTotal(invoices)
+    : getAnnualDeductionsByProperty(invoices, propId);
+  const hasDeductions = Object.values(deductionSchedule).some(v => v > 0);
 
   let start: Date;
   let end: Date;
@@ -421,6 +435,7 @@ function computeModel(scopeAll: Derived[], tf: TF, propId: string, anchor: Ancho
   if (propId !== 'ALL' && scope.length === 1) {
     const p = scope[0];
     if (p.inc > 0 || records.some(r => r.propertyId === p.id)) trendCategories.push({ id: 'INCOME', name: 'Entrate', color: 'var(--accent)' });
+    if (hasDeductions && includeTaxRefunds) trendCategories.push({ id: 'TAX_REFUND', name: 'Rimborsi 730', color: '#a855f7' });
     Object.keys(CAT_LABEL).forEach(cat => {
       if ((p.costs || []).some(c => c.category === cat) || (cat === 'MORTGAGE' && p.mortgage > 0) || (cat === 'MAINTENANCE' && p.condoFees > 0) || (cat === 'TAX' && p.defaultTaxRate > 0 && p.inc > 0)) {
         trendCategories.push({ id: cat, name: CAT_LABEL[cat] || cat, color: CAT_COLOR[cat] || '#8b97ab' });
@@ -531,11 +546,32 @@ function computeModel(scopeAll: Derived[], tf: TF, propId: string, anchor: Ancho
       exp += stepExp * factor;
     });
 
+    const stepYear = stepDate.getFullYear();
+    const annualDeduction = deductionSchedule[stepYear] || 0;
+    let stepRefund = 0;
+    if (annualDeduction > 0 && includeTaxRefunds) {
+      if (tf === 'GIORNO') stepRefund = (annualDeduction / 365) * 7;
+      else if (tf === 'MESE') stepRefund = annualDeduction / 52;
+      else if (tf === '6M') stepRefund = annualDeduction / 12;
+      else stepRefund = annualDeduction / 12; // ANNO (month)
+    }
+
+    if (hasDeductions && includeTaxRefunds) {
+      catVals['TAX_REFUND'] = Number((stepRefund / 1000).toFixed(2));
+    }
+
     Object.keys(catVals).forEach(cat => {
       catVals[cat] = Number(catVals[cat].toFixed(2));
     });
 
-    chart.push({ name: ax.labels[i], value: Math.round(v / 1000), income: +(inc / 1000).toFixed(2), expense: +(exp / 1000).toFixed(2), ...catVals });
+    chart.push({
+      name: ax.labels[i],
+      value: Math.round(v / 1000),
+      income: +(inc / 1000).toFixed(2),
+      taxRefund: +(stepRefund / 1000).toFixed(2),
+      expense: +(exp / 1000).toFixed(2),
+      ...catVals
+    });
   }
   const cur = Math.round(scope.reduce((s, p) => {
     const realVal = getPropertyValueAtDate(p, end);
@@ -545,11 +581,22 @@ function computeModel(scopeAll: Derived[], tf: TF, propId: string, anchor: Ancho
   const cats = Object.keys(CAT_LABEL).map(id => ({ id, name: CAT_LABEL[id] || id, color: CAT_COLOR[id] || '#8b97ab', v: Math.round(catActual[id] || 0) })).sort((a, b) => b.v - a.v);
   const periodInc = scope.reduce((s, p) => s + getPeriodIncome(p, tf, anchor, start, end, records), 0);
   const periodExp = cats.reduce((a, b) => a + b.v, 0);
-  const cash = periodInc - periodExp;
-  const margin = periodInc > 0 ? cash / periodInc : 0;
+
+  let periodRefund = 0;
+  if (hasDeductions && includeTaxRefunds) {
+    const anchorYearDeduction = deductionSchedule[anchor.y] || 0;
+    if (tf === 'GIORNO') periodRefund = (anchorYearDeduction / 365) * 7;
+    else if (tf === 'MESE') periodRefund = anchorYearDeduction / 12;
+    else if (tf === '6M') periodRefund = anchorYearDeduction / 2;
+    else periodRefund = anchorYearDeduction;
+  }
+  const periodTaxRefund = Math.round(periodRefund);
+  const totalPeriodIncome = periodInc + (includeTaxRefunds ? periodTaxRefund : 0);
+  const cash = totalPeriodIncome - periodExp;
+  const margin = totalPeriodIncome > 0 ? cash / totalPeriodIncome : 0;
   const yield_ = cur > 0 ? (scope.reduce((a, p) => a + p.inc * 12, 0) / cur * 100) : 0;
   const growthPct = chart[0]?.value > 0 ? ((chart[n - 1].value - chart[0].value) / chart[0].value * 100) : 0;
-  return { scope, chart, cur, plus: cur - buy, periodInc, periodExp, cash, margin, yield_, growthPct, periodLabel: ax.periodLabel, cats, trendCategories, start, end };
+  return { scope, chart, cur, plus: cur - buy, periodInc, periodTaxRefund, hasDeductions, periodExp, cash, margin, yield_, growthPct, periodLabel: ax.periodLabel, cats, trendCategories, start, end };
 }
 function nextDue(scope: Derived[], tf: TF, anchor: Anchor, start?: Date, end?: Date) {
   let dueStart: Date;
@@ -617,16 +664,23 @@ function AreaChart({ data, height, accent }: { data: any[]; height: number; acce
 function DualLine({ data, height }: { data: any[]; height: number }) {
   const [hi, setHi] = useState<number | null>(null);
   const W = 600, H = height, pad = { l: 6, r: 6, t: 14, b: 22 };
-  const all = data.flatMap(d => [d.income, d.expense]); let min = Math.min(...all), max = Math.max(...all); const sp = (max - min) || 1; min -= sp * 0.18; max += sp * 0.12;
+  const all = data.flatMap(d => [d.income, d.expense, d.taxRefund || 0]);
+  let min = Math.min(...all), max = Math.max(...all);
+  const sp = (max - min) || 1; min -= sp * 0.18; max += sp * 0.12;
+  if (min < 0) min = 0;
   const ix = (i: number) => pad.l + i * (W - pad.l - pad.r) / ((data.length - 1) || 1);
   const iy = (v: number) => H - pad.b - (v - min) / (max - min) * (H - pad.t - pad.b);
-  const path = (key: string) => data.map((d, i) => `${i ? 'L' : 'M'}${ix(i).toFixed(1)},${iy(d[key]).toFixed(1)}`).join(' ');
+  const path = (key: string) => data.map((d, i) => `${i ? 'L' : 'M'}${ix(i).toFixed(1)},${iy(d[key] || 0).toFixed(1)}`).join(' ');
   const onMove = (e: React.MouseEvent) => { const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); const i = Math.round((e.clientX - r.left) / r.width * (data.length - 1)); setHi(Math.max(0, Math.min(data.length - 1, i))); };
+  const hasTaxRefund = data.some(d => (d.taxRefund || 0) > 0);
   return (
     <div className="chartbox" onMouseMove={onMove} onMouseLeave={() => setHi(null)}>
       <svg width="100%" height={H} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none">
         {[0,1,2,3].map(g => { const y = pad.t + g * (H - pad.t - pad.b) / 3; return <line key={g} x1={pad.l} x2={W - pad.r} y1={y} y2={y} stroke="var(--grid-line)" vectorEffect="non-scaling-stroke" />; })}
         <path d={path('income')} fill="none" stroke="var(--accent)" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
+        {hasTaxRefund && (
+          <path d={path('taxRefund')} fill="none" stroke="#a855f7" strokeWidth="2.0" strokeDasharray="3 3" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
+        )}
         <path d={path('expense')} fill="none" stroke="var(--neg)" strokeWidth="1.8" strokeDasharray="3 4" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
         {hi != null && <line x1={ix(hi)} x2={ix(hi)} y1={pad.t} y2={H - pad.b} stroke="var(--accent)" strokeWidth="1" opacity="0.5" vectorEffect="non-scaling-stroke" />}
         {data.map((d, i) => <text key={i} x={ix(i)} y={H - 6} textAnchor="middle" fontFamily="var(--mono)" fontSize="9" fill="var(--faint)">{d.name}</text>)}
@@ -634,6 +688,9 @@ function DualLine({ data, height }: { data: any[]; height: number }) {
       {hi != null && <div className="tip" style={{ left: `${ix(hi) / W * 100}%`, top: '14%' }}>
         <div className="tlab">{data[hi].name}</div>
         <div className="trow"><span className="nm"><span className="dot" style={{ background: 'var(--accent)' }} />Entrate</span><span className="num">{eur(data[hi].income * 1000)}</span></div>
+        {hasTaxRefund && (data[hi].taxRefund || 0) > 0 && (
+          <div className="trow"><span className="nm"><span className="dot" style={{ background: '#a855f7' }} />Rimborsi 730</span><span className="num" style={{ color: '#c084fc' }}>+{eur(data[hi].taxRefund * 1000)}</span></div>
+        )}
         <div className="trow"><span className="nm"><span className="dot" style={{ background: 'var(--neg)' }} />Uscite</span><span className="num">{eur(data[hi].expense * 1000)}</span></div>
       </div>}
     </div>
@@ -871,6 +928,8 @@ interface GlobalDashboardProps {
 export const GlobalDashboard: React.FC<GlobalDashboardProps> = ({ portalTarget }) => {
   const [properties, setProperties] = useState<Property[]>([]);
   const [records, setRecords] = useState<RentalRecord[]>([]);
+  const [invoices, setInvoices] = useState<InvoiceRecord[]>([]);
+  const [includeTaxRefunds, setIncludeTaxRefunds] = useState<boolean>(true);
   const [excludedCategories, setExcludedCategories] = useState<string[]>([]);
   const [theme, setTheme] = useState<'DEFAULT' | 'NEON'>('DEFAULT');
   const [isLoading, setIsLoading] = useState(true);
@@ -894,8 +953,22 @@ export const GlobalDashboard: React.FC<GlobalDashboardProps> = ({ portalTarget }
   }, []);
   useEffect(() => {
     (async () => {
-      try { setIsLoading(true); if (db.init) await db.init(); const [props, recs] = await Promise.all([db.getProperties(), db.getRentalRecords()]); setProperties(props || []); setRecords(recs || []); }
-      catch (e) { console.error('Errore caricamento dashboard:', e); } finally { setIsLoading(false); }
+      try {
+        setIsLoading(true);
+        if (db.init) await db.init();
+        const [props, recs, invs] = await Promise.all([
+          db.getProperties(),
+          db.getRentalRecords(),
+          db.getInvoices()
+        ]);
+        setProperties(props || []);
+        setRecords(recs || []);
+        setInvoices(invs || []);
+      } catch (e) {
+        console.error('Errore caricamento dashboard:', e);
+      } finally {
+        setIsLoading(false);
+      }
     })();
   }, []);
   useEffect(() => {
@@ -906,7 +979,10 @@ export const GlobalDashboard: React.FC<GlobalDashboardProps> = ({ portalTarget }
 
   const derived = useMemo(() => properties.map(derive), [properties]);
   const averageNetCapRate = useMemo(() => getPortfolioNetCapRate(derived), [derived]);
-  const m = useMemo(() => computeModel(derived, tf, propId, anchor, records), [derived, tf, propId, anchor, records]);
+  const m = useMemo(
+    () => computeModel(derived, tf, propId, anchor, records, invoices, includeTaxRefunds),
+    [derived, tf, propId, anchor, records, invoices, includeTaxRefunds]
+  );
   
   const toggleCategory = (catId: string) => {
     setExcludedCategories(prev => 
@@ -917,8 +993,9 @@ export const GlobalDashboard: React.FC<GlobalDashboardProps> = ({ portalTarget }
   const { activeCats, periodExpFiltered, cashFiltered, marginFiltered, filteredChartData, filteredTrendCategories } = useMemo(() => {
     const activeCats = m.cats.filter(c => !excludedCategories.includes(c.id));
     const periodExpFiltered = activeCats.reduce((sum, c) => sum + c.v, 0);
-    const cashFiltered = m.periodInc - periodExpFiltered;
-    const marginFiltered = m.periodInc > 0 ? cashFiltered / m.periodInc : 0;
+    const totalEffectiveIncome = m.periodInc + (includeTaxRefunds ? m.periodTaxRefund : 0);
+    const cashFiltered = totalEffectiveIncome - periodExpFiltered;
+    const marginFiltered = totalEffectiveIncome > 0 ? cashFiltered / totalEffectiveIncome : 0;
 
     const filteredChartData = m.chart.map(item => {
       let activeExpense = 0;
@@ -1014,7 +1091,11 @@ export const GlobalDashboard: React.FC<GlobalDashboardProps> = ({ portalTarget }
             <div>
               <div className="micro" style={{ fontSize: 10.5, letterSpacing: '0.12em', marginBottom: 2 }}>Cashflow · {m.periodLabel}</div>
               <div className="num cashv" style={{ color: cashFiltered >= 0 ? 'var(--pos)' : 'var(--neg)' }}>{seur(cashFiltered)}</div>
-              <div className="sub2">Target 25% · {marginFiltered >= 0.25 ? 'superato' : 'sotto'}</div>
+              <div className="sub2">
+                {m.hasDeductions && includeTaxRefunds && m.periodTaxRefund > 0
+                  ? `Incl. 730: +${eur(m.periodTaxRefund)}`
+                  : `Target 25% · ${marginFiltered >= 0.25 ? 'superato' : 'sotto'}`}
+              </div>
             </div>
           </div>
 
@@ -1042,11 +1123,40 @@ export const GlobalDashboard: React.FC<GlobalDashboardProps> = ({ portalTarget }
 
           <div className="panel pad p-flow">
             <div className="ph">
-              <h3>{propId === 'ALL' ? 'Entrate vs Uscite' : 'Trend per Categoria'}</h3>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <h3>{propId === 'ALL' ? 'Entrate vs Uscite' : 'Trend per Categoria'}</h3>
+                {m.hasDeductions && (
+                  <button
+                    type="button"
+                    onClick={() => setIncludeTaxRefunds(!includeTaxRefunds)}
+                    style={{
+                      background: includeTaxRefunds ? 'rgba(168, 85, 247, 0.15)' : 'var(--inset)',
+                      border: `1px solid ${includeTaxRefunds ? 'rgba(168, 85, 247, 0.45)' : 'var(--card-border)'}`,
+                      color: includeTaxRefunds ? '#c084fc' : 'var(--dim)',
+                      borderRadius: '8px',
+                      padding: '2px 8px',
+                      fontSize: '11px',
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                      transition: 'all 0.2s ease'
+                    }}
+                    title="Includi quote annuali rimborsi fiscali 730 da ristrutturazioni"
+                  >
+                    <span>🧾</span>
+                    <span>730: {includeTaxRefunds ? 'Incluso' : 'Escluso'}</span>
+                  </button>
+                )}
+              </div>
               <div className="leg2" style={{ flexWrap: 'wrap', justifyContent: 'flex-end', gap: '8px' }}>
                 {propId === 'ALL' ? (
                   <>
                     <span className="micro"><span className="ln a" />Entrate</span>
+                    {m.hasDeductions && includeTaxRefunds && (
+                      <span className="micro" style={{ color: '#c084fc' }}><span className="ln" style={{ background: '#a855f7' }} />Rimborsi 730</span>
+                    )}
                     <span className="micro"><span className="ln n" />Uscite</span>
                   </>
                 ) : (

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { InvoiceRecord, TaxCategory, InvoiceBeneficiary, InvoicePaymentMethod, Property, Attachment, Scenario } from '../types';
 import { db } from '../services/dbService';
+import { computeDeduction } from '../services/taxDeductionService';
 
 interface InvoiceTaxArchiveProps {
   theme?: 'DEFAULT' | 'NEON';
@@ -383,95 +384,6 @@ export const InvoiceTaxArchive: React.FC<InvoiceTaxArchiveProps> = ({
   // Currency Formatter
   const fmt = (num: number) =>
     new Intl.NumberFormat('it-IT', { style: 'currency', currency: 'EUR' }).format(num || 0);
-
-  // Calculation Engine matching Italian Tax Rules
-  const computeDeduction = (
-    amount: number,
-    category: TaxCategory,
-    fallbackRate: number,
-    rateG?: number,
-    rateC?: number,
-    ratioG = 0.5,
-    ratioC = 0.5
-  ) => {
-    let gRate = typeof rateG === 'number' ? rateG : fallbackRate;
-    let cRate = typeof rateC === 'number' ? rateC : fallbackRate;
-
-    let eligible = amount;
-    let installments = 10;
-
-    if (category === 'AGENZIA_19') {
-      eligible = Math.min(amount, 1000);
-      installments = 1;
-      gRate = 19;
-      cRate = 19;
-    } else if (category === 'NOTAIO_MUTUO') {
-      eligible = Math.min(amount, 4000);
-      installments = 1;
-      gRate = 19;
-      cRate = 19;
-    } else if (category === 'BONUS_MOBILI') {
-      eligible = Math.min(amount, 5000);
-      installments = 10;
-      gRate = 50;
-      cRate = 50;
-    } else if (category === 'BONUS_50') {
-      eligible = Math.min(amount, 96000);
-      installments = 10;
-      gRate = 50;
-      cRate = 50;
-    } else if (category === 'BONUS_36') {
-      eligible = Math.min(amount, 96000);
-      installments = 10;
-      gRate = 36;
-      cRate = 36;
-    } else if (category === 'BONUS_SPLIT') {
-      eligible = Math.min(amount, 96000);
-      installments = 10;
-      // Differentiated rates for G and C
-    } else if (category === 'ECOBONUS_65') {
-      eligible = Math.min(amount, 96000);
-      installments = 10;
-      gRate = 65;
-      cRate = 65;
-    } else {
-      return {
-        deductibleBase: 0,
-        totalDeduction: 0,
-        yearlyQuota: 0,
-        gTotal: 0,
-        cTotal: 0,
-        gYearly: 0,
-        cYearly: 0,
-        installmentCount: 0,
-        rateG: 0,
-        rateC: 0
-      };
-    }
-
-    const baseG = eligible * ratioG;
-    const baseC = eligible * ratioC;
-    const deductionG = baseG * (gRate / 100);
-    const deductionC = baseC * (cRate / 100);
-    const totalDeduction = deductionG + deductionC;
-
-    const yearlyG = installments === 1 ? deductionG : deductionG / installments;
-    const yearlyC = installments === 1 ? deductionC : deductionC / installments;
-    const yearlyQuota = yearlyG + yearlyC;
-
-    return {
-      deductibleBase: eligible,
-      totalDeduction,
-      yearlyQuota,
-      gTotal: deductionG,
-      cTotal: deductionC,
-      gYearly: yearlyG,
-      cYearly: yearlyC,
-      installmentCount: installments,
-      rateG: gRate,
-      rateC: cRate
-    };
-  };
 
   // Distinct Years for Filter Dropdown
   const availableYears = useMemo(() => {

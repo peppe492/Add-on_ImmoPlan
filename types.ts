@@ -185,6 +185,7 @@ export interface ForecastSimulationConfig {
   etfAnnualReturn?: number; // % (e.g. 7.0 for ETF World)
   taxRegime: 'ESENTE_0' | 'CEDOLARE_21' | 'CEDOLARE_10' | 'IRPEF_ORDINARIA';
   ownerMarginalTaxRate?: number; // % (e.g. 35 or 43)
+  includeTaxDeductions?: boolean; // toggle to include 10-year 730 tax deductions
 }
 
 export interface YearlyForecastResult {
@@ -201,6 +202,8 @@ export interface YearlyForecastResult {
   etfWorldBenchmarkValue: number;
   roePercent: number;
   energyPenaltyBonus: number;
+  taxDeductionQuota?: number;
+  netCashFlowWithoutTax?: number;
 }
 
 export interface PropertyForecastData {

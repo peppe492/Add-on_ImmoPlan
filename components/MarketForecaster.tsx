@@ -1,7 +1,9 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { Property, ForecastSimulationConfig, PropertyForecastData } from '../types';
+import { Property, ForecastSimulationConfig, PropertyForecastData, InvoiceRecord } from '../types';
 import { calculatePropertyForecast, getDefaultSimulationConfig } from '../services/forecastService';
 import { getMicroMarketMetrics } from '../services/openDataService';
+import { db } from '../services/dbService';
+import { getAnnualDeductionsByProperty, getDeductionSummaryForProperty } from '../services/taxDeductionService';
 import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend } from 'recharts';
 
 interface MarketForecasterProps {
@@ -14,6 +16,7 @@ const seur = (n: number) => (n > 0 ? '+' : n < 0 ? '−' : '') + '€ ' + Math.a
 
 const CustomChartTooltip = ({ active, payload, label }: any) => {
   if (!active || !payload || !payload.length) return null;
+  const pData = payload[0]?.payload;
   return (
     <div className="mf-tooltip">
       <div className="mf-tt-label">Proiezione Anno {label}</div>
@@ -24,6 +27,20 @@ const CustomChartTooltip = ({ active, payload, label }: any) => {
           <span className="mf-tt-val">{eur(p.value)}</span>
         </div>
       ))}
+      {pData?.taxDeduction > 0 && (
+        <div className="mf-tt-row" style={{ borderTop: '1px dashed rgba(255,255,255,0.15)', marginTop: 6, paddingTop: 6 }}>
+          <span className="mf-tt-dot" style={{ background: '#a855f7' }} />
+          <span className="mf-tt-name" style={{ color: '#c084fc' }}>Detrazione 730:</span>
+          <span className="mf-tt-val" style={{ color: '#c084fc' }}>+{eur(pData.taxDeduction)}/anno</span>
+        </div>
+      )}
+      {pData?.netCashFlow != null && (
+        <div className="mf-tt-row">
+          <span className="mf-tt-dot" style={{ background: pData.netCashFlow >= 0 ? '#10b981' : '#f43f5e' }} />
+          <span className="mf-tt-name">Net Cash Flow:</span>
+          <span className="mf-tt-val" style={{ color: pData.netCashFlow >= 0 ? 'var(--pos, #10b981)' : 'var(--neg, #f43f5e)' }}>{seur(pData.netCashFlow)}/anno</span>
+        </div>
+      )}
     </div>
   );
 };
@@ -35,6 +52,27 @@ export const MarketForecaster: React.FC<MarketForecasterProps> = ({ property, on
 
   const [metrics, setMetrics] = useState(property.forecastData?.metrics || null);
   const [loadingMetrics, setLoadingMetrics] = useState(false);
+  const [invoices, setInvoices] = useState<InvoiceRecord[]>([]);
+
+  useEffect(() => {
+    let active = true;
+    db.getInvoices()
+      .then(res => {
+        if (active) setInvoices(res || []);
+      })
+      .catch(err => console.warn('[MarketForecaster] Failed loading invoices:', err));
+    return () => { active = false; };
+  }, [property.id]);
+
+  const annualTaxDeductions = useMemo(() => {
+    return getAnnualDeductionsByProperty(invoices, property.id);
+  }, [invoices, property.id]);
+
+  const deductionSummary = useMemo(() => {
+    return getDeductionSummaryForProperty(invoices, property.id);
+  }, [invoices, property.id]);
+
+  const hasDeductions = deductionSummary.invoiceCount > 0 && deductionSummary.totalDeduction > 0;
 
   useEffect(() => {
     let isMounted = true;
@@ -61,8 +99,8 @@ export const MarketForecaster: React.FC<MarketForecasterProps> = ({ property, on
   }, [property.id, property.address, property.coordinates?.lat, property.coordinates?.lng, property.forecastData?.metrics]);
 
   const forecastData: PropertyForecastData = useMemo(() => {
-    return calculatePropertyForecast(property, config, metrics || undefined);
-  }, [property, config, metrics]);
+    return calculatePropertyForecast(property, config, metrics || undefined, annualTaxDeductions);
+  }, [property, config, metrics, annualTaxDeductions]);
 
   const handleConfigChange = <K extends keyof ForecastSimulationConfig>(key: K, value: ForecastSimulationConfig[K]) => {
     const updated = { ...config, [key]: value };
@@ -93,7 +131,9 @@ export const MarketForecaster: React.FC<MarketForecasterProps> = ({ property, on
     accumulatedEquity: p.accumulatedEquity,
     remainingDebt: p.remainingMortgageDebt,
     etfBenchmark: p.etfWorldBenchmarkValue,
-    netCashFlow: p.netCashFlow
+    netCashFlow: p.netCashFlow,
+    taxDeduction: p.taxDeductionQuota || 0,
+    netCashFlowWithoutTax: p.netCashFlowWithoutTax || p.netCashFlow
   }));
 
   return (
@@ -154,6 +194,21 @@ export const MarketForecaster: React.FC<MarketForecasterProps> = ({ property, on
           </div>
           <div className="mf-kpi-sub">Capitale composto su cash iniziale</div>
         </div>
+
+        {hasDeductions && (
+          <div className="mf-kpi-card" style={{ borderColor: 'rgba(168, 85, 247, 0.4)', background: 'linear-gradient(180deg, rgba(168, 85, 247, 0.12) 0%, rgba(15, 23, 42, 0.6) 100%)' }}>
+            <div className="mf-kpi-top">
+              <span className="mf-kpi-label" style={{ color: '#c084fc' }}>Recupero Fiscale 730 (10 Rate)</span>
+              <span className="mf-kpi-icon">🧾</span>
+            </div>
+            <div className="mf-kpi-val" style={{ color: '#c084fc' }}>
+              {config.includeTaxDeductions !== false ? `+${eur(deductionSummary.currentYearQuota)}/a` : '€ 0 (Escluse)'}
+            </div>
+            <div className="mf-kpi-sub" style={{ color: '#cbd5e1' }}>
+              Totale detraibile: <strong style={{ color: '#e9d5ff' }}>{eur(deductionSummary.totalDeduction)}</strong>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Main Layout: Control Sliders Left + Chart Right */}
@@ -305,6 +360,28 @@ export const MarketForecaster: React.FC<MarketForecasterProps> = ({ property, on
               <span className="mf-switch-slider" />
             </label>
           </div>
+
+          {/* Tax Deductions 730 Toggle */}
+          {hasDeductions && (
+            <div className="mf-toggle-card" style={{ borderColor: config.includeTaxDeductions !== false ? 'rgba(168, 85, 247, 0.45)' : undefined }}>
+              <div className="mf-toggle-info">
+                <span className="mf-toggle-title" style={{ color: config.includeTaxDeductions !== false ? '#c084fc' : undefined }}>
+                  🧾 Detrazioni Ristrutturazione 730 (10 Anni)
+                </span>
+                <span className="mf-toggle-desc">
+                  Rilevate <strong>{deductionSummary.invoiceCount} fatture</strong> per questo immobile ({eur(deductionSummary.totalEligibleBase)} di spesa detraibile). Quota annuale stimata: <strong style={{ color: '#c084fc' }}>+{eur(deductionSummary.currentYearQuota)}/anno</strong> per 10 anni (Totale recupero IRPEF: {eur(deductionSummary.totalDeduction)}).
+                </span>
+              </div>
+              <label className="mf-switch">
+                <input
+                  type="checkbox"
+                  checked={config.includeTaxDeductions !== false}
+                  onChange={e => handleConfigChange('includeTaxDeductions', e.target.checked)}
+                />
+                <span className="mf-switch-slider" />
+              </label>
+            </div>
+          )}
         </div>
 
         {/* Right Panel: Recharts 4-Curve Chart */}
@@ -388,6 +465,7 @@ export const MarketForecaster: React.FC<MarketForecasterProps> = ({ property, on
                   <th>Equità Netta</th>
                   <th>Debito Mutuo</th>
                   <th>Canone Netto/a</th>
+                  {hasDeductions && <th>Detrazione 730</th>}
                   <th>NCF Annuo</th>
                   {config.enableEtfBenchmark && <th>ETF World</th>}
                 </tr>
@@ -396,6 +474,7 @@ export const MarketForecaster: React.FC<MarketForecasterProps> = ({ property, on
                 {[1, 3, 5, 10].map(yr => {
                   const item = projections[yr - 1];
                   if (!item) return null;
+                  const hasYrDeduction = (item.taxDeductionQuota || 0) > 0;
                   return (
                     <tr key={yr}>
                       <td className="mf-td-year">{yr} {yr === 1 ? 'Anno' : 'Anni'}</td>
@@ -403,6 +482,13 @@ export const MarketForecaster: React.FC<MarketForecasterProps> = ({ property, on
                       <td className="mf-td-num mf-accent">{eur(item.accumulatedEquity)}</td>
                       <td className="mf-td-num mf-neg">{eur(item.remainingMortgageDebt)}</td>
                       <td className="mf-td-num">{eur(item.annualNetRent)}</td>
+                      {hasDeductions && (
+                        <td className="mf-td-num" style={{ color: hasYrDeduction ? '#c084fc' : 'var(--dim)' }}>
+                          {config.includeTaxDeductions !== false
+                            ? (hasYrDeduction ? `+${eur(item.taxDeductionQuota || 0)}` : '€ 0 (scaduta)')
+                            : 'Esclusa'}
+                        </td>
+                      )}
                       <td className={`mf-td-num ${item.netCashFlow >= 0 ? 'mf-pos' : 'mf-neg'}`}>
                         {seur(item.netCashFlow)}
                       </td>
