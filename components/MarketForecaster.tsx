@@ -119,7 +119,9 @@ export const MarketForecaster: React.FC<MarketForecasterProps> = ({ property, on
   const simulatedQuota = isSimulatingRenovation
     ? (Math.min(config.simulationRenovationCost || 0, 96000) * ((config.simulationDeductionRate || 50) / 100)) / 10
     : 0;
-  const effectiveQuota = hasRealInvoices ? deductionSummary.currentYearQuota : simulatedQuota;
+  const effectiveQuota = hasRealInvoices
+    ? (deductionSummary.currentYearQuota || deductionSummary.nextYearQuota || Object.values(deductionSummary.annualSchedule)[0] || 0)
+    : simulatedQuota;
 
   useEffect(() => {
     let isMounted = true;
@@ -517,9 +519,9 @@ export const MarketForecaster: React.FC<MarketForecasterProps> = ({ property, on
                 </span>
                 <span className="mf-toggle-desc">
                   {hasRealInvoices ? (
-                    <>Rilevate <strong>{deductionSummary.invoiceCount} fatture</strong> archiviate per questo immobile ({eur(deductionSummary.totalEligibleBase)} di spesa). Quota calcolata: <strong style={{ color: '#c084fc' }}>+{eur(deductionSummary.currentYearQuota)}/anno</strong> per 10 anni.</>
+                    <>Rilevate <strong>{deductionSummary.invoiceCount} fatture</strong> archiviate ({eur(deductionSummary.totalEligibleBase)} di spesa). Quota calcolata: <strong style={{ color: '#c084fc' }}>+{eur(effectiveQuota)}/anno</strong> per 10 anni (recupero 730 a partire dall'anno successivo alla spesa).</>
                   ) : (
-                    <>Simula l'impatto fiscale in 10 rate annuali di futuri lavori di ristrutturazione/ecobonus previsti (es. per Besozzo 14).</>
+                    <>Simula l'impatto fiscale in 10 rate annuali di futuri lavori previsti (partono dall'anno successivo alla spesa).</>
                   )}
                 </span>
               </div>
@@ -562,7 +564,7 @@ export const MarketForecaster: React.FC<MarketForecasterProps> = ({ property, on
                 </div>
                 {(config.simulationRenovationCost || 0) > 0 && (
                   <div style={{ gridColumn: 'span 2', fontSize: 11, color: '#c084fc', background: 'rgba(168, 85, 247, 0.1)', padding: '6px 10px', borderRadius: 6, border: '1px solid rgba(168, 85, 247, 0.25)' }}>
-                    Quota calcolata: <strong>+{eur(simulatedQuota)}/anno</strong> per 10 anni (Totale recupero 730: {eur(simulatedQuota * 10)})
+                    Quota calcolata: <strong>+{eur(simulatedQuota)}/anno</strong> per 10 anni (decorrenza dal 730 a partire dall'Anno 2, totale {eur(simulatedQuota * 10)})
                   </div>
                 )}
               </div>

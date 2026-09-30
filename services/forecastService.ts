@@ -480,10 +480,14 @@ export const calculatePropertyForecast = (
 
     // Net Cash Flow & 730 Tax Deductions Integration
     let taxDeductionQuota = (annualTaxDeductions && annualTaxDeductions[calendarYear]) ? annualTaxDeductions[calendarYear] : 0;
-    if (taxDeductionQuota === 0 && (config.simulationRenovationCost || 0) > 0 && year <= 10) {
-      const eligibleBase = Math.min(config.simulationRenovationCost || 0, 96000);
-      const totalDetr = eligibleBase * ((config.simulationDeductionRate || 50) / 100);
-      taxDeductionQuota = totalDetr / 10;
+    if (taxDeductionQuota === 0 && (config.simulationRenovationCost || 0) > 0) {
+      // In Italia le detrazioni fiscali per lavori eseguiti nell'Anno 1 (anno fatturazione)
+      // decorrono dall'Anno 2 (anno fiscale successivo, dichiarazione 730) per 10 rate annuali
+      if (year >= 2 && year <= 11) {
+        const eligibleBase = Math.min(config.simulationRenovationCost || 0, 96000);
+        const totalDetr = eligibleBase * ((config.simulationDeductionRate || 50) / 100);
+        taxDeductionQuota = totalDetr / 10;
+      }
     }
 
     const netCashFlowWithoutTax = annualNetRent - annualMortgagePayment;

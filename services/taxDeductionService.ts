@@ -154,11 +154,14 @@ const calculateYearlySchedule = (
     const rateC = inv.rateClaudia ?? inv.rate;
     const calc = computeDeduction(inv.amount, inv.taxCategory, inv.rate, rateG, rateC, gRatio, cRatio);
     const invYear = typeof inv.fiscalYear === 'number' && !isNaN(inv.fiscalYear) ? inv.fiscalYear : new Date().getFullYear();
+    // In Italia le detrazioni fiscali (Bonus Ristrutturazioni, Ecobonus, ecc.)
+    // decorrono dall'anno solare successivo alla fatturazione/spesa (Dichiarazione 730/Redditi dell'anno dopo).
+    const startDeductionYear = invYear + 1;
 
     if (calc.installmentCount === 1) {
-      schedule[invYear] = (schedule[invYear] || 0) + calc.totalDeduction;
+      schedule[startDeductionYear] = (schedule[startDeductionYear] || 0) + calc.totalDeduction;
     } else if (calc.installmentCount > 1) {
-      for (let y = invYear; y < invYear + calc.installmentCount; y++) {
+      for (let y = startDeductionYear; y < startDeductionYear + calc.installmentCount; y++) {
         schedule[y] = (schedule[y] || 0) + calc.yearlyQuota;
       }
     }
@@ -220,12 +223,14 @@ export const getDeductionSummaryForProperty = (
   const years = Object.keys(annualSchedule).map(Number).sort((a, b) => a - b);
   const currentYear = new Date().getFullYear();
   const currentYearQuota = annualSchedule[currentYear] || 0;
+  const nextYearQuota = annualSchedule[currentYear + 1] || 0;
 
   return {
     invoiceCount: propInvoices.length,
     totalEligibleBase,
     totalDeduction,
     currentYearQuota,
+    nextYearQuota,
     annualSchedule,
     activeYears: years,
     categoryBreakdown
