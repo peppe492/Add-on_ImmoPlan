@@ -104,8 +104,12 @@ export const calculatePropertyForecast = (
     lastUpdated: new Date().toISOString().split('T')[0]
   };
 
-  const initialValue = property.currentValue > 0 ? property.currentValue : (property.purchasePrice || 200000);
-  const purchasePrice = property.purchasePrice || initialValue;
+  const purchasePrice = property.purchasePrice && property.purchasePrice > 0
+    ? property.purchasePrice
+    : (property.currentValue || 200000);
+  const currentValuation = property.currentValue && property.currentValue > 0
+    ? property.currentValue
+    : purchasePrice;
 
   // 1. Calculate Initial Loan Amount & Monthly Payment
   let initialLoanAmount = 0;
@@ -172,10 +176,10 @@ export const calculatePropertyForecast = (
   let energyPenaltyBonusVal = 0;
   if (['A', 'B'].includes(activeEnergyClass)) {
     energyDelta = 0.015; // +1.5% bonus annually for green classes A/B
-    energyPenaltyBonusVal = initialValue * 0.015;
+    energyPenaltyBonusVal = currentValuation * 0.015;
   } else if (['E', 'F', 'G'].includes(activeEnergyClass)) {
     energyDelta = -0.020; // -2.0% penalty annually for high-emission classes E/F/G
-    energyPenaltyBonusVal = -initialValue * 0.020;
+    energyPenaltyBonusVal = -currentValuation * 0.020;
   }
 
   // Property Size Multiplier
@@ -361,6 +365,23 @@ export const calculatePropertyForecast = (
     applicable: true
   } : undefined;
 
+  const currentYear = new Date().getFullYear();
+
+  // Helper to extract recorded historical valuation for a specific year (latest recorded in that year)
+  const getHistoricalValuationForYear = (targetYear: number): number | null => {
+    if (!property.valuations || property.valuations.length === 0) return null;
+    const yearVals = property.valuations.filter(v => v.date && v.date.startsWith(String(targetYear)));
+    if (yearVals.length === 0) return null;
+    yearVals.sort((a, b) => b.date.localeCompare(a.date));
+    return yearVals[0].value;
+  };
+
+  // Historical CAGR between purchase price at baseYear and currentValuation at currentYear
+  const historicalYearsElapsed = Math.max(1, currentYear - baseYear);
+  const historicalCagr = (baseYear < currentYear && purchasePrice > 0)
+    ? Math.pow(currentValuation / purchasePrice, 1 / historicalYearsElapsed) - 1
+    : netAnnualGrowthRate;
+
   let cumulativeNetCashFlow = 0;
   let cumulativePrincipalPaid = 0;
   let cumulativeInterestPaid = 0;
@@ -372,12 +393,40 @@ export const calculatePropertyForecast = (
 
     // Timeline ownership fraction and elapsed time in years
     const ownershipMonths = isYear1 ? ownershipMonthsYear1 : 12;
-    const elapsedGrowthYears = isYear1 ? ownershipFractionYear1 : (ownershipFractionYear1 + (year - 1));
 
-    // Property Value V(t) proportioned for Year 1 remaining months
-    const propertyValue = Math.round(initialValue * Math.pow(1 + netAnnualGrowthRate, elapsedGrowthYears));
-    const optimisticValue = Math.round(propertyValue * Math.pow(1.02, elapsedGrowthYears));
-    const pessimisticValue = Math.round(propertyValue * Math.pow(0.98, elapsedGrowthYears));
+    // Property Value V(t):
+    // 1. Year 1 (calendarYear === baseYear): starts at actual purchasePrice (e.g. 215.000 for Besozzo 6)
+    // 2. Historical intermediate years (baseYear < calendarYear < currentYear): uses recorded valuation or smooth CAGR interpolation
+    // 3. Current Year (calendarYear === currentYear): matches actual current valuation / market estimate (e.g. 269.000)
+    // 4. Future Projections (calendarYear > currentYear): projects from currentValuation using simulation growth rate
+    let propertyValue = 0;
+    let optimisticValue = 0;
+    let pessimisticValue = 0;
+
+    const futureBaseYear = Math.max(currentYear, baseYear);
+
+    if (calendarYear === baseYear) {
+      propertyValue = purchasePrice;
+      optimisticValue = propertyValue;
+      pessimisticValue = propertyValue;
+    } else if (calendarYear < currentYear) {
+      const recordedVal = getHistoricalValuationForYear(calendarYear);
+      propertyValue = recordedVal !== null
+        ? recordedVal
+        : Math.round(purchasePrice * Math.pow(1 + historicalCagr, calendarYear - baseYear));
+      optimisticValue = propertyValue;
+      pessimisticValue = propertyValue;
+    } else if (calendarYear === currentYear) {
+      propertyValue = currentValuation;
+      optimisticValue = propertyValue;
+      pessimisticValue = propertyValue;
+    } else {
+      // Future projection (calendarYear > futureBaseYear)
+      const futureYearsAhead = calendarYear - futureBaseYear;
+      propertyValue = Math.round(currentValuation * Math.pow(1 + netAnnualGrowthRate, futureYearsAhead));
+      optimisticValue = Math.round(propertyValue * Math.pow(1.02, futureYearsAhead));
+      pessimisticValue = Math.round(propertyValue * Math.pow(0.98, futureYearsAhead));
+    }
 
     // Dynamic Indexed Gross Rent proportioned for Year 1 ownership
     const cpiInflationRate = config.cpiInflationTarget / 100;
