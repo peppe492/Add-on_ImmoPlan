@@ -188,10 +188,32 @@ export interface ForecastSimulationConfig {
   includeTaxDeductions?: boolean; // toggle to include 10-year 730 tax deductions
   simulationRenovationCost?: number; // Costo lavori ristrutturazione da simulare (es. 40.000 €)
   simulationDeductionRate?: number; // % detrazione (50% Bonus Casa, 65% Ecobonus, 36%)
+  // Estinzione Parziale Mutuo (Simulazione)
+  simulationPayoffAmount?: number; // Importo estinzione anticipata parziale (es. 10.000 €)
+  simulationPayoffYear?: number; // Anno di esecuzione estinzione (1-10)
+  simulationPayoffStrategy?: 'REDUCE_INSTALLMENT' | 'REDUCE_DURATION'; // Riduci rata vs riduci durata
+}
+
+export interface MortgagePayoffSimulationSummary {
+  payoffAmount: number;
+  payoffYear: number;
+  calendarYear: number;
+  strategy: 'REDUCE_INSTALLMENT' | 'REDUCE_DURATION';
+  previousDebtAtPayoff: number;
+  newDebtAtPayoff: number;
+  originalMonthlyInstallment: number;
+  newMonthlyInstallment: number;
+  monthlySavings: number;
+  originalRemainingYears: number;
+  newRemainingYears: number;
+  yearsSaved: number;
+  totalInterestSaved: number;
+  applicable: boolean;
 }
 
 export interface YearlyForecastResult {
   year: number;
+  calendarYear?: number;
   propertyValue: number;
   optimisticValue: number;
   pessimisticValue: number;
@@ -206,6 +228,8 @@ export interface YearlyForecastResult {
   energyPenaltyBonus: number;
   taxDeductionQuota?: number;
   netCashFlowWithoutTax?: number;
+  annualMortgagePayment?: number;
+  isPayoffYear?: boolean;
 }
 
 export interface PropertyForecastData {
@@ -213,6 +237,8 @@ export interface PropertyForecastData {
   yearlyProjections: YearlyForecastResult[];
   metrics: MicroMarketMetrics;
   lastSimulatedAt: string;
+  baseYear?: number; // Anno reale d'acquisto (es. 2021)
+  mortgagePayoffSummary?: MortgagePayoffSimulationSummary;
 }
 
 export interface Property {

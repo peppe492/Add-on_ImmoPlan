@@ -3,7 +3,8 @@ import {
   ForecastSimulationConfig,
   MicroMarketMetrics,
   YearlyForecastResult,
-  PropertyForecastData
+  PropertyForecastData,
+  MortgagePayoffSimulationSummary
 } from '../types';
 
 /**
@@ -29,7 +30,10 @@ export const getDefaultSimulationConfig = (property?: Property): ForecastSimulat
     ownerMarginalTaxRate: property?.financials?.marginalTaxRate ?? (property?.financials?.taxRegime === 'IRPEF_ORDINARIA' ? (property?.financials?.defaultTaxRate ?? 35) : 35),
     includeTaxDeductions: true,
     simulationRenovationCost: 0,
-    simulationDeductionRate: 50
+    simulationDeductionRate: 50,
+    simulationPayoffAmount: 0,
+    simulationPayoffYear: 3,
+    simulationPayoffStrategy: 'REDUCE_INSTALLMENT'
   };
 };
 
@@ -190,10 +194,110 @@ export const calculatePropertyForecast = (
     });
   }
 
+  // Base purchase year (Anno 1 = anno reale di acquisto registrato)
+  let baseYear = new Date().getFullYear();
+  if (property.purchaseDate) {
+    const parsedY = parseInt(property.purchaseDate.substring(0, 4), 10);
+    if (!isNaN(parsedY) && parsedY >= 1990 && parsedY <= 2050) {
+      baseYear = parsedY;
+    }
+  }
+
+  // Pre-calculate Mortgage Payoff Simulation if configured
+  const simPayoffAmount = Math.max(0, config.simulationPayoffAmount || 0);
+  const simPayoffYear = Math.max(1, Math.min(10, config.simulationPayoffYear || 3));
+  const simStrategy = config.simulationPayoffStrategy || 'REDUCE_INSTALLMENT';
+
+  // Base amortization schedule without payoff for baseline comparison
+  const baselineSchedule: { remainingDebt: number; monthlyInstallment: number }[] = [];
+  for (let y = 1; y <= 10; y++) {
+    baselineSchedule.push(calculateRemainingMortgageDebt(
+      initialLoanAmount,
+      mortgageRate,
+      durationYears,
+      y
+    ));
+  }
+
+  // Debt immediately prior to payoff year
+  const debtPriorToPayoff = simPayoffYear === 1
+    ? initialLoanAmount
+    : calculateRemainingMortgageDebt(initialLoanAmount, mortgageRate, durationYears, simPayoffYear - 1).remainingDebt;
+
+  const isPayoffApplicable = simPayoffAmount > 0 && debtPriorToPayoff > 0 && initialLoanAmount > 0;
+  const actualPayoffAmount = isPayoffApplicable ? Math.min(simPayoffAmount, debtPriorToPayoff) : 0;
+  const postPayoffPrincipal = Math.max(0, debtPriorToPayoff - actualPayoffAmount);
+  const remainingYearsAtPayoff = Math.max(1, durationYears - (simPayoffYear - 1));
+
+  let newMonthlyInstallmentPostPayoff = monthlyMortgagePayment;
+  let newRemainingYearsPostPayoff = remainingYearsAtPayoff;
+  let totalInterestSaved = 0;
+
+  if (isPayoffApplicable && actualPayoffAmount > 0) {
+    const effectiveR = (mortgageRate > 0 ? mortgageRate : 3.5) / 12 / 100;
+    const nRemaining = remainingYearsAtPayoff * 12;
+
+    if (simStrategy === 'REDUCE_INSTALLMENT') {
+      // Strategy 1: Reduce Monthly Installment, keep original remaining duration
+      if (postPayoffPrincipal === 0) {
+        newMonthlyInstallmentPostPayoff = 0;
+      } else if (effectiveR === 0) {
+        newMonthlyInstallmentPostPayoff = postPayoffPrincipal / nRemaining;
+      } else {
+        newMonthlyInstallmentPostPayoff = postPayoffPrincipal * (effectiveR * Math.pow(1 + effectiveR, nRemaining)) / (Math.pow(1 + effectiveR, nRemaining) - 1);
+      }
+      // Interest saved = total installments that would have been paid vs new installments + payoff
+      const oldTotalRemainingPayments = (monthlyMortgagePayment > 0 ? monthlyMortgagePayment : baselineSchedule[0].monthlyInstallment) * nRemaining;
+      const newTotalRemainingPayments = newMonthlyInstallmentPostPayoff * nRemaining + actualPayoffAmount;
+      totalInterestSaved = Math.max(0, Math.round(oldTotalRemainingPayments - newTotalRemainingPayments));
+    } else {
+      // Strategy 2: Reduce Duration, keep original monthly installment
+      const origMonthly = monthlyMortgagePayment > 0 ? monthlyMortgagePayment : baselineSchedule[0].monthlyInstallment;
+      if (postPayoffPrincipal === 0) {
+        newRemainingYearsPostPayoff = 0;
+        newMonthlyInstallmentPostPayoff = 0;
+        totalInterestSaved = Math.max(0, Math.round(origMonthly * nRemaining - actualPayoffAmount));
+      } else if (origMonthly <= postPayoffPrincipal * effectiveR) {
+        // Fallback: installment doesn't cover interest
+        newRemainingYearsPostPayoff = remainingYearsAtPayoff;
+      } else if (effectiveR === 0) {
+        const newMonths = Math.ceil(postPayoffPrincipal / origMonthly);
+        newRemainingYearsPostPayoff = Number((newMonths / 12).toFixed(1));
+        totalInterestSaved = 0;
+      } else {
+        // n = -ln(1 - (P * r / PMT)) / ln(1 + r)
+        const numMonths = Math.ceil(-Math.log(1 - (postPayoffPrincipal * effectiveR / origMonthly)) / Math.log(1 + effectiveR));
+        newRemainingYearsPostPayoff = Number((Math.max(1, numMonths) / 12).toFixed(1));
+        const oldTotalPayments = origMonthly * nRemaining;
+        const newTotalPayments = (origMonthly * numMonths) + actualPayoffAmount;
+        totalInterestSaved = Math.max(0, Math.round(oldTotalPayments - newTotalPayments));
+      }
+    }
+  }
+
+  const mortgagePayoffSummary: MortgagePayoffSimulationSummary | undefined = isPayoffApplicable ? {
+    payoffAmount: actualPayoffAmount,
+    payoffYear: simPayoffYear,
+    calendarYear: baseYear + (simPayoffYear - 1),
+    strategy: simStrategy,
+    previousDebtAtPayoff: Math.round(debtPriorToPayoff),
+    newDebtAtPayoff: Math.round(postPayoffPrincipal),
+    originalMonthlyInstallment: Math.round(monthlyMortgagePayment > 0 ? monthlyMortgagePayment : baselineSchedule[0].monthlyInstallment),
+    newMonthlyInstallment: Math.round(newMonthlyInstallmentPostPayoff),
+    monthlySavings: Math.max(0, Math.round((monthlyMortgagePayment > 0 ? monthlyMortgagePayment : baselineSchedule[0].monthlyInstallment) - newMonthlyInstallmentPostPayoff)),
+    originalRemainingYears: remainingYearsAtPayoff,
+    newRemainingYears: newRemainingYearsPostPayoff,
+    yearsSaved: Number(Math.max(0, remainingYearsAtPayoff - newRemainingYearsPostPayoff).toFixed(1)),
+    totalInterestSaved,
+    applicable: true
+  } : undefined;
+
   let cumulativeNetCashFlow = 0;
   const yearlyProjections: YearlyForecastResult[] = [];
 
   for (let year = 1; year <= 10; year++) {
+    const calendarYear = baseYear + (year - 1);
+
     // Property Value V(t)
     const propertyValue = Math.round(initialValue * Math.pow(1 + netAnnualGrowthRate, year));
     const optimisticValue = Math.round(propertyValue * Math.pow(1.02, year));
@@ -224,19 +328,49 @@ export const calculatePropertyForecast = (
     // Net operating rent (allows negative values when vacancy or operating expenses exceed rent)
     const annualNetRent = effectiveGrossRent - taxAmount - annualOperatingExpenses;
 
-    // Mortgage Amortization & Debt
-    const { remainingDebt, monthlyInstallment } = calculateRemainingMortgageDebt(
-      initialLoanAmount,
-      mortgageRate,
-      durationYears,
-      year
-    );
-    const annualMortgagePayment = monthlyMortgagePayment > 0 ? monthlyMortgagePayment * 12 : monthlyInstallment * 12;
+    // Mortgage Amortization & Debt (Incorporating Partial Payoff if applicable)
+    let remainingDebt = 0;
+    let annualMortgagePayment = 0;
+
+    if (!isPayoffApplicable || year < simPayoffYear) {
+      // Standard amortization prior to payoff
+      const baseCalc = calculateRemainingMortgageDebt(
+        initialLoanAmount,
+        mortgageRate,
+        durationYears,
+        year
+      );
+      remainingDebt = baseCalc.remainingDebt;
+      annualMortgagePayment = monthlyMortgagePayment > 0 ? monthlyMortgagePayment * 12 : baseCalc.monthlyInstallment * 12;
+    } else {
+      // Post-payoff or payoff year
+      const yearsSincePayoff = year - (simPayoffYear - 1);
+      if (simStrategy === 'REDUCE_INSTALLMENT') {
+        const postCalc = calculateRemainingMortgageDebt(
+          postPayoffPrincipal,
+          mortgageRate,
+          remainingYearsAtPayoff,
+          yearsSincePayoff
+        );
+        remainingDebt = postCalc.remainingDebt;
+        annualMortgagePayment = newMonthlyInstallmentPostPayoff * 12;
+      } else {
+        // Reduce duration strategy
+        const postCalc = calculateRemainingMortgageDebt(
+          postPayoffPrincipal,
+          mortgageRate,
+          Math.max(1, Math.ceil(newRemainingYearsPostPayoff)),
+          yearsSincePayoff
+        );
+        remainingDebt = postCalc.remainingDebt;
+        annualMortgagePayment = yearsSincePayoff <= newRemainingYearsPostPayoff
+          ? (monthlyMortgagePayment > 0 ? monthlyMortgagePayment * 12 : baselineSchedule[0].monthlyInstallment * 12)
+          : 0;
+      }
+    }
 
     // Net Cash Flow & 730 Tax Deductions Integration
-    const currentYear = new Date().getFullYear();
-    const simCalendarYear = currentYear + (year - 1);
-    let taxDeductionQuota = (annualTaxDeductions && annualTaxDeductions[simCalendarYear]) ? annualTaxDeductions[simCalendarYear] : 0;
+    let taxDeductionQuota = (annualTaxDeductions && annualTaxDeductions[calendarYear]) ? annualTaxDeductions[calendarYear] : 0;
     if (taxDeductionQuota === 0 && (config.simulationRenovationCost || 0) > 0 && year <= 10) {
       const eligibleBase = Math.min(config.simulationRenovationCost || 0, 96000);
       const totalDetr = eligibleBase * ((config.simulationDeductionRate || 50) / 100);
@@ -262,6 +396,7 @@ export const calculatePropertyForecast = (
 
     yearlyProjections.push({
       year,
+      calendarYear,
       propertyValue,
       optimisticValue,
       pessimisticValue,
@@ -275,7 +410,9 @@ export const calculatePropertyForecast = (
       roePercent,
       energyPenaltyBonus: Math.round(energyPenaltyBonusVal),
       taxDeductionQuota: Math.round(taxDeductionQuota),
-      netCashFlowWithoutTax: Math.round(netCashFlowWithoutTax)
+      netCashFlowWithoutTax: Math.round(netCashFlowWithoutTax),
+      annualMortgagePayment: Math.round(annualMortgagePayment),
+      isPayoffYear: isPayoffApplicable && year === simPayoffYear
     });
   }
 
@@ -283,7 +420,9 @@ export const calculatePropertyForecast = (
     config,
     yearlyProjections,
     metrics,
-    lastSimulatedAt: new Date().toISOString()
+    lastSimulatedAt: new Date().toISOString(),
+    baseYear,
+    mortgagePayoffSummary
   };
 };
 

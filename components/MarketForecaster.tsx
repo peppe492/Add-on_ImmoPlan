@@ -17,9 +17,17 @@ const seur = (n: number) => (n > 0 ? '+' : n < 0 ? '−' : '') + '€ ' + Math.a
 const CustomChartTooltip = ({ active, payload, label }: any) => {
   if (!active || !payload || !payload.length) return null;
   const pData = payload[0]?.payload;
+  const calY = pData?.calendarYear;
   return (
     <div className="mf-tooltip">
-      <div className="mf-tt-label">Proiezione Anno {label}</div>
+      <div className="mf-tt-label">
+        Proiezione Anno {label} {calY ? `(${calY})` : ''}
+        {pData?.isPayoffYear && (
+          <span style={{ marginLeft: 6, fontSize: 9.5, color: '#38bdf8', background: 'rgba(56,189,248,0.2)', padding: '2px 5px', borderRadius: 4 }}>
+            ESTINZIONE MUTUO
+          </span>
+        )}
+      </div>
       {payload.map((p: any, i: number) => (
         <div className="mf-tt-row" key={i}>
           <span className="mf-tt-dot" style={{ background: p.color || p.stroke }} />
@@ -53,6 +61,7 @@ export const MarketForecaster: React.FC<MarketForecasterProps> = ({ property, on
   const [metrics, setMetrics] = useState(property.forecastData?.metrics || null);
   const [loadingMetrics, setLoadingMetrics] = useState(false);
   const [invoices, setInvoices] = useState<InvoiceRecord[]>([]);
+  const [validationSuccessMsg, setValidationSuccessMsg] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -78,7 +87,6 @@ export const MarketForecaster: React.FC<MarketForecasterProps> = ({ property, on
     ? (Math.min(config.simulationRenovationCost || 0, 96000) * ((config.simulationDeductionRate || 50) / 100)) / 10
     : 0;
   const effectiveQuota = hasRealInvoices ? deductionSummary.currentYearQuota : simulatedQuota;
-  const hasAnyDeduction = hasRealInvoices || isSimulatingRenovation;
 
   useEffect(() => {
     let isMounted = true;
@@ -122,7 +130,56 @@ export const MarketForecaster: React.FC<MarketForecasterProps> = ({ property, on
     if (onSaveForecast) onSaveForecast(updatedProp);
   };
 
+  // Validazione dell'Estinzione Parziale Mutuo: applica i nuovi parametri all'immobile
+  const handleValidatePayoff = () => {
+    const sum = forecastData.mortgagePayoffSummary;
+    if (!sum || !sum.applicable) return;
+
+    const confirmMsg = sum.strategy === 'REDUCE_INSTALLMENT'
+      ? `Confermi l'applicazione dell'estinzione parziale di ${eur(sum.payoffAmount)}?\n\nNuova rata mensile: ${eur(sum.newMonthlyInstallment)} (Risparmio: ${eur(sum.monthlySavings)}/mese)\nNuovo debito residuo: ${eur(sum.newDebtAtPayoff)}\nRisparmio interessi totali stimato: ${eur(sum.totalInterestSaved)}`
+      : `Confermi l'applicazione dell'estinzione parziale di ${eur(sum.payoffAmount)}?\n\nNuova durata residua: ${sum.newRemainingYears} anni (Risparmiati: ${sum.yearsSaved} anni)\nNuovo debito residuo: ${eur(sum.newDebtAtPayoff)}\nRisparmio interessi totali stimato: ${eur(sum.totalInterestSaved)}`;
+
+    if (!window.confirm(confirmMsg)) return;
+
+    const currentMortCost = property.recurringCosts?.find(c => c.category === 'MORTGAGE');
+    let updatedRecurring = property.recurringCosts ? [...property.recurringCosts] : [];
+
+    if (sum.strategy === 'REDUCE_INSTALLMENT') {
+      if (currentMortCost) {
+        updatedRecurring = updatedRecurring.map(c => c.category === 'MORTGAGE' ? { ...c, amount: sum.newMonthlyInstallment } : c);
+      }
+    }
+
+    const updatedProp: Property = {
+      ...property,
+      financials: {
+        ...(property.financials || { condoFees: 0, defaultTaxRate: 0, mortgageAmount: 0 }),
+        mortgageAmount: sum.strategy === 'REDUCE_INSTALLMENT' && (property.financials?.mortgageAmount || 0) <= 10000
+          ? sum.newMonthlyInstallment
+          : sum.newDebtAtPayoff,
+        mortgageDuration: sum.strategy === 'REDUCE_DURATION'
+          ? Math.max(1, Math.round((property.financials?.mortgageDuration || 20) - sum.yearsSaved))
+          : property.financials?.mortgageDuration
+      },
+      recurringCosts: updatedRecurring,
+      forecastData: {
+        ...forecastData,
+        config: {
+          ...config,
+          simulationPayoffAmount: 0
+        }
+      }
+    };
+
+    setConfig(prev => ({ ...prev, simulationPayoffAmount: 0 }));
+    if (onSaveForecast) onSaveForecast(updatedProp);
+
+    setValidationSuccessMsg(`Estinzione parziale di ${eur(sum.payoffAmount)} applicata con successo ai parametri finanziari del mutuo!`);
+    setTimeout(() => setValidationSuccessMsg(null), 7000);
+  };
+
   const projections = forecastData.yearlyProjections;
+  const baseYear = forecastData.baseYear || (property.purchaseDate ? parseInt(property.purchaseDate.substring(0, 4), 10) : new Date().getFullYear());
   const y5 = projections[4] || projections[projections.length - 1];
   const y10 = projections[9] || projections[projections.length - 1];
 
@@ -130,17 +187,24 @@ export const MarketForecaster: React.FC<MarketForecasterProps> = ({ property, on
   const gain5y = y5 ? y5.propertyValue - initialVal : 0;
   const etfDiff10y = y10 ? (y10.accumulatedEquity + (y10.cumulativeNetCashFlow || 0)) - y10.etfWorldBenchmarkValue : 0;
 
+  const payoffSummary = forecastData.mortgagePayoffSummary;
+
   const chartData = projections.map(p => ({
-    year: `Anno ${p.year}`,
+    year: `${p.year} (${p.calendarYear || baseYear + p.year - 1})`,
     yearNum: p.year,
+    calendarYear: p.calendarYear || (baseYear + p.year - 1),
     propertyValue: p.propertyValue,
     accumulatedEquity: p.accumulatedEquity,
     remainingDebt: p.remainingMortgageDebt,
     etfBenchmark: p.etfWorldBenchmarkValue,
     netCashFlow: p.netCashFlow,
     taxDeduction: p.taxDeductionQuota || 0,
-    netCashFlowWithoutTax: p.netCashFlowWithoutTax || p.netCashFlow
+    netCashFlowWithoutTax: p.netCashFlowWithoutTax || p.netCashFlow,
+    isPayoffYear: p.isPayoffYear
   }));
+
+  const hasMortgage = (property.financials?.mortgageAmount && property.financials.mortgageAmount > 0) ||
+    Boolean(property.recurringCosts?.some(c => c.category === 'MORTGAGE' && c.amount > 0));
 
   return (
     <div className="mf-container">
@@ -151,19 +215,28 @@ export const MarketForecaster: React.FC<MarketForecasterProps> = ({ property, on
         <div>
           <div className="mf-eyebrow">Modulo 5 · Motore Previsionale Finanziario</div>
           <h2 className="mf-title">Trend Prezzi &amp; Simulazione Mercato (1-10 Anni)</h2>
-          <p className="mf-sub">Analisi deterministica, impatto Direttiva UE Case Verdi e benchmark competitivo ETF World</p>
+          <p className="mf-sub">
+            Orizzonte decennale dall'acquisto ({baseYear}) al {baseYear + 9} · Direttiva Case Verdi, Estinzioni Mutuo &amp; Benchmark ETF
+          </p>
         </div>
         <button className="mf-btn mf-btn-primary" onClick={handleSave}>
           💾 Salva Simulazione
         </button>
       </div>
 
+      {validationSuccessMsg && (
+        <div style={{ background: 'rgba(16, 185, 129, 0.15)', border: '1px solid rgba(16, 185, 129, 0.4)', color: '#34d399', padding: '12px 16px', borderRadius: 10, fontSize: 12, display: 'flex', alignItems: 'center', gap: 10 }}>
+          <span>✅</span>
+          <span>{validationSuccessMsg}</span>
+        </div>
+      )}
+
       {/* KPI Cards Grid */}
       <div className="mf-kpi-grid">
         <div className="mf-kpi-card mf-kpi-hero">
           <div className="mf-kpi-glow" />
           <div className="mf-kpi-top">
-            <span className="mf-kpi-label">Valore Stimato (5 Anni)</span>
+            <span className="mf-kpi-label">Valore Stimato (Anno 5 · {baseYear + 4})</span>
             <span className="mf-kpi-badge mf-badge-pos">{gain5y >= 0 ? '+' : ''}{((gain5y / initialVal) * 100).toFixed(1)}%</span>
           </div>
           <div className="mf-kpi-val">{eur(y5?.propertyValue || 0)}</div>
@@ -172,7 +245,7 @@ export const MarketForecaster: React.FC<MarketForecasterProps> = ({ property, on
 
         <div className="mf-kpi-card">
           <div className="mf-kpi-top">
-            <span className="mf-kpi-label">Equità Netta Immobile (5a)</span>
+            <span className="mf-kpi-label">Equità Netta Immobile (5a · {baseYear + 4})</span>
             <span className="mf-kpi-icon">🏠</span>
           </div>
           <div className="mf-kpi-val">{eur(y5?.accumulatedEquity || 0)}</div>
@@ -190,7 +263,7 @@ export const MarketForecaster: React.FC<MarketForecasterProps> = ({ property, on
 
         <div className="mf-kpi-card">
           <div className="mf-kpi-top">
-            <span className="mf-kpi-label">Diff. vs ETF World (10 Anni)</span>
+            <span className="mf-kpi-label">Diff. vs ETF World (10a · {baseYear + 9})</span>
             <span className={`mf-kpi-badge ${etfDiff10y >= 0 ? 'mf-badge-pos' : 'mf-badge-neg'}`}>
               {etfDiff10y >= 0 ? 'Supera ETF' : 'Sotto ETF'}
             </span>
@@ -201,22 +274,40 @@ export const MarketForecaster: React.FC<MarketForecasterProps> = ({ property, on
           <div className="mf-kpi-sub">Capitale composto su cash iniziale</div>
         </div>
 
-        <div className="mf-kpi-card" style={{ borderColor: (config.includeTaxDeductions !== false && effectiveQuota > 0) ? 'rgba(168, 85, 247, 0.45)' : undefined, background: (config.includeTaxDeductions !== false && effectiveQuota > 0) ? 'linear-gradient(180deg, rgba(168, 85, 247, 0.12) 0%, rgba(15, 23, 42, 0.6) 100%)' : undefined }}>
-          <div className="mf-kpi-top">
-            <span className="mf-kpi-label" style={{ color: (config.includeTaxDeductions !== false && effectiveQuota > 0) ? '#c084fc' : undefined }}>Recupero Fiscale 730</span>
-            <span className="mf-kpi-icon">🧾</span>
+        {/* Card Estinzione Mutuo se attiva, altrimenti Recupero Fiscale 730 */}
+        {payoffSummary && payoffSummary.applicable ? (
+          <div className="mf-kpi-card" style={{ borderColor: 'rgba(56, 189, 248, 0.45)', background: 'linear-gradient(180deg, rgba(56, 189, 248, 0.12) 0%, rgba(15, 23, 42, 0.6) 100%)' }}>
+            <div className="mf-kpi-top">
+              <span className="mf-kpi-label" style={{ color: '#38bdf8' }}>Risparmio Estinzione Mutuo</span>
+              <span className="mf-kpi-icon">🏦</span>
+            </div>
+            <div className="mf-kpi-val" style={{ color: '#38bdf8' }}>
+              {seur(payoffSummary.totalInterestSaved)}
+            </div>
+            <div className="mf-kpi-sub" style={{ color: '#bae6fd' }}>
+              {payoffSummary.strategy === 'REDUCE_INSTALLMENT'
+                ? `Rata: ${eur(payoffSummary.originalMonthlyInstallment)} ➔ ${eur(payoffSummary.newMonthlyInstallment)} (-${eur(payoffSummary.monthlySavings)}/m)`
+                : `Durata: ${payoffSummary.originalRemainingYears}a ➔ ${payoffSummary.newRemainingYears}a (-${payoffSummary.yearsSaved} anni)`}
+            </div>
           </div>
-          <div className="mf-kpi-val" style={{ color: (config.includeTaxDeductions !== false && effectiveQuota > 0) ? '#c084fc' : 'var(--dim)' }}>
-            {config.includeTaxDeductions !== false && effectiveQuota > 0 ? `+${eur(effectiveQuota)}/a` : '€ 0'}
+        ) : (
+          <div className="mf-kpi-card" style={{ borderColor: (config.includeTaxDeductions !== false && effectiveQuota > 0) ? 'rgba(168, 85, 247, 0.45)' : undefined, background: (config.includeTaxDeductions !== false && effectiveQuota > 0) ? 'linear-gradient(180deg, rgba(168, 85, 247, 0.12) 0%, rgba(15, 23, 42, 0.6) 100%)' : undefined }}>
+            <div className="mf-kpi-top">
+              <span className="mf-kpi-label" style={{ color: (config.includeTaxDeductions !== false && effectiveQuota > 0) ? '#c084fc' : undefined }}>Recupero Fiscale 730</span>
+              <span className="mf-kpi-icon">🧾</span>
+            </div>
+            <div className="mf-kpi-val" style={{ color: (config.includeTaxDeductions !== false && effectiveQuota > 0) ? '#c084fc' : 'var(--dim)' }}>
+              {config.includeTaxDeductions !== false && effectiveQuota > 0 ? `+${eur(effectiveQuota)}/a` : '€ 0'}
+            </div>
+            <div className="mf-kpi-sub" style={{ color: '#cbd5e1' }}>
+              {hasRealInvoices
+                ? `Totale detraibile: ${eur(deductionSummary.totalDeduction)} (${deductionSummary.invoiceCount} fatture)`
+                : isSimulatingRenovation
+                  ? `Simulazione: 10 rate su ${eur(config.simulationRenovationCost || 0)}`
+                  : '10 rate annuali da lavori'}
+            </div>
           </div>
-          <div className="mf-kpi-sub" style={{ color: '#cbd5e1' }}>
-            {hasRealInvoices
-              ? `Totale detraibile: ${eur(deductionSummary.totalDeduction)} (${deductionSummary.invoiceCount} fatture)`
-              : isSimulatingRenovation
-                ? `Simulazione: 10 rate su ${eur(config.simulationRenovationCost || 0)}`
-                : '10 rate annuali da lavori'}
-          </div>
-        </div>
+        )}
       </div>
 
       {/* Main Layout: Control Sliders Left + Chart Right */}
@@ -415,7 +506,7 @@ export const MarketForecaster: React.FC<MarketForecasterProps> = ({ property, on
                     className="mf-select"
                     style={{ padding: '6px 8px', fontSize: 11.5 }}
                     value={config.simulationDeductionRate || 50}
-                    onChange={e => handleConfigChange('simulationDeductionRate', parseInt(e.target.value) || 50)}
+                    onChange={e => handleConfigChange('simulationDeductionRate', parseInt(e.target.value, 10) || 50)}
                   >
                     <option value={50}>Bonus Casa 50% (Ristrutturazioni)</option>
                     <option value={65}>Ecobonus 65% (Efficienza energetica)</option>
@@ -430,6 +521,142 @@ export const MarketForecaster: React.FC<MarketForecasterProps> = ({ property, on
               </div>
             )}
           </div>
+
+          {/* SIMULATORE ESTINZIONI PARZIALI MUTUO */}
+          {hasMortgage && (
+            <div className="mf-toggle-card mf-payoff-box" style={{ borderColor: (config.simulationPayoffAmount || 0) > 0 ? 'rgba(56, 189, 248, 0.45)' : undefined, flexDirection: 'column', alignItems: 'stretch', gap: 12 }}>
+              <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 }}>
+                <div>
+                  <span className="mf-toggle-title" style={{ color: '#38bdf8', display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span>🏦</span>
+                    <span>Simulatore Estinzione Parziale Mutuo</span>
+                  </span>
+                  <span className="mf-toggle-desc">
+                    Calcola l'impatto di un versamento straordinario sul debito residuo e il risparmio totale di interessi.
+                  </span>
+                </div>
+                {(config.simulationPayoffAmount || 0) > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => handleConfigChange('simulationPayoffAmount', 0)}
+                    style={{ background: 'transparent', border: 'none', color: 'var(--dim)', fontSize: 10.5, cursor: 'pointer', textDecoration: 'underline' }}
+                  >
+                    Azzera
+                  </button>
+                )}
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                <div>
+                  <label className="mf-field-label" style={{ fontSize: 10.5, color: '#38bdf8' }}>Importo Estinzione (€)</label>
+                  <input
+                    type="number"
+                    step="1000"
+                    min="0"
+                    placeholder="Es. 10000"
+                    className="mf-select"
+                    style={{ fontFamily: 'var(--mono)', padding: '6px 8px', fontSize: 11.5 }}
+                    value={config.simulationPayoffAmount || ''}
+                    onChange={e => handleConfigChange('simulationPayoffAmount', Math.max(0, parseFloat(e.target.value) || 0))}
+                  />
+                </div>
+                <div>
+                  <label className="mf-field-label" style={{ fontSize: 10.5, color: '#38bdf8' }}>Anno Esecuzione</label>
+                  <select
+                    className="mf-select"
+                    style={{ padding: '6px 8px', fontSize: 11.5 }}
+                    value={config.simulationPayoffYear || 3}
+                    onChange={e => handleConfigChange('simulationPayoffYear', parseInt(e.target.value, 10))}
+                  >
+                    {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(y => (
+                      <option key={y} value={y}>
+                        Anno {y} ({baseYear + y - 1})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="mf-field-label" style={{ fontSize: 10.5, color: '#38bdf8' }}>Strategia Estinzione Parziale</label>
+                <div className="mf-seg-buttons">
+                  <button
+                    type="button"
+                    className={`mf-seg-btn ${config.simulationPayoffStrategy !== 'REDUCE_DURATION' ? 'active' : ''}`}
+                    onClick={() => handleConfigChange('simulationPayoffStrategy', 'REDUCE_INSTALLMENT')}
+                    style={{ fontSize: 10, padding: '6px 8px' }}
+                  >
+                    📉 Riduci Rata Mensile
+                  </button>
+                  <button
+                    type="button"
+                    className={`mf-seg-btn ${config.simulationPayoffStrategy === 'REDUCE_DURATION' ? 'active' : ''}`}
+                    onClick={() => handleConfigChange('simulationPayoffStrategy', 'REDUCE_DURATION')}
+                    style={{ fontSize: 10, padding: '6px 8px' }}
+                  >
+                    ⏳ Riduci Durata Mutuo
+                  </button>
+                </div>
+              </div>
+
+              {/* Box Riepilogo Risparmio e Tasto Validazione */}
+              {payoffSummary && payoffSummary.applicable && (
+                <div className="mf-payoff-summary" style={{ background: 'rgba(15, 23, 42, 0.7)', border: '1px solid rgba(56, 189, 248, 0.3)', borderRadius: 8, padding: 10, marginTop: 4 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: '#38bdf8' }}>💡 Risultato Simulazione:</span>
+                    <span style={{ fontSize: 10, color: '#7dd3fc', fontFamily: 'var(--mono)' }}>Anno {payoffSummary.payoffYear} ({payoffSummary.calendarYear})</span>
+                  </div>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, fontSize: 11 }}>
+                    <div style={{ background: 'rgba(255, 255, 255, 0.03)', padding: '6px 8px', borderRadius: 6 }}>
+                      <span style={{ color: 'var(--dim)', fontSize: 9.5, display: 'block' }}>Debito pre/post:</span>
+                      <span style={{ fontFamily: 'var(--mono)' }}>{eur(payoffSummary.previousDebtAtPayoff)} ➔ <strong style={{ color: '#38bdf8' }}>{eur(payoffSummary.newDebtAtPayoff)}</strong></span>
+                    </div>
+
+                    <div style={{ background: 'rgba(255, 255, 255, 0.03)', padding: '6px 8px', borderRadius: 6 }}>
+                      <span style={{ color: 'var(--dim)', fontSize: 9.5, display: 'block' }}>Interessi Totali Risparmiati:</span>
+                      <strong style={{ color: '#34d399', fontFamily: 'var(--mono)', fontSize: 12 }}>{seur(payoffSummary.totalInterestSaved)}</strong>
+                    </div>
+
+                    {payoffSummary.strategy === 'REDUCE_INSTALLMENT' ? (
+                      <div style={{ gridColumn: 'span 2', background: 'rgba(255, 255, 255, 0.03)', padding: '6px 8px', borderRadius: 6, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <div>
+                          <span style={{ color: 'var(--dim)', fontSize: 9.5, display: 'block' }}>Nuova Rata Mensile:</span>
+                          <span style={{ fontFamily: 'var(--mono)' }}>{eur(payoffSummary.originalMonthlyInstallment)} ➔ <strong style={{ color: '#38bdf8' }}>{eur(payoffSummary.newMonthlyInstallment)}/m</strong></span>
+                        </div>
+                        <span style={{ color: '#34d399', fontWeight: 700, fontSize: 11 }}>
+                          +{eur(payoffSummary.monthlySavings)}/mese cashflow
+                        </span>
+                      </div>
+                    ) : (
+                      <div style={{ gridColumn: 'span 2', background: 'rgba(255, 255, 255, 0.03)', padding: '6px 8px', borderRadius: 6, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <div>
+                          <span style={{ color: 'var(--dim)', fontSize: 9.5, display: 'block' }}>Durata Residua Mutuo:</span>
+                          <span style={{ fontFamily: 'var(--mono)' }}>{payoffSummary.originalRemainingYears} anni ➔ <strong style={{ color: '#38bdf8' }}>{payoffSummary.newRemainingYears} anni</strong></span>
+                        </div>
+                        <span style={{ color: '#34d399', fontWeight: 700, fontSize: 11 }}>
+                          -{payoffSummary.yearsSaved} anni anticipati
+                        </span>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Pulsante Valida & Applica */}
+                  <div style={{ marginTop: 10, display: 'flex', justifyContent: 'flex-end' }}>
+                    <button
+                      type="button"
+                      className="mf-btn mf-btn-payoff"
+                      onClick={handleValidatePayoff}
+                      title="Salva e applica definitivamente questa estinzione ai parametri finanziari dell'immobile"
+                      style={{ background: 'linear-gradient(135deg, #0284c7 0%, #0369a1 100%)', color: '#fff', fontSize: 10.5, padding: '7px 12px' }}
+                    >
+                      <span>⚡ Valida &amp; Applica al Mutuo</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Right Panel: Recharts 4-Curve Chart */}
@@ -504,6 +731,7 @@ export const MarketForecaster: React.FC<MarketForecasterProps> = ({ property, on
           </div>
 
           {/* Forecast Metrics Table (Years 1, 3, 5, 10) */}
+          {/* Forecast Metrics Table (Years 1, 3, 5, 10 + Payoff Year if set) */}
           <div className="mf-table-box">
             <table className="mf-table">
               <thead>
@@ -512,6 +740,7 @@ export const MarketForecaster: React.FC<MarketForecasterProps> = ({ property, on
                   <th>Valore Immobile</th>
                   <th>Equità Netta</th>
                   <th>Debito Mutuo</th>
+                  <th>Rata Mutuo/a</th>
                   <th>Canone Netto/a</th>
                   <th>Detrazione 730</th>
                   <th>NCF Annuo</th>
@@ -519,31 +748,44 @@ export const MarketForecaster: React.FC<MarketForecasterProps> = ({ property, on
                 </tr>
               </thead>
               <tbody>
-                {[1, 3, 5, 10].map(yr => {
-                  const item = projections[yr - 1];
-                  if (!item) return null;
-                  const hasYrDeduction = (item.taxDeductionQuota || 0) > 0;
-                  return (
-                    <tr key={yr}>
-                      <td className="mf-td-year">{yr} {yr === 1 ? 'Anno' : 'Anni'}</td>
-                      <td className="mf-td-num">{eur(item.propertyValue)}</td>
-                      <td className="mf-td-num mf-accent">{eur(item.accumulatedEquity)}</td>
-                      <td className="mf-td-num mf-neg">{eur(item.remainingMortgageDebt)}</td>
-                      <td className="mf-td-num">{eur(item.annualNetRent)}</td>
-                      <td className="mf-td-num" style={{ color: hasYrDeduction ? '#c084fc' : 'var(--dim)' }}>
-                        {config.includeTaxDeductions !== false
-                          ? (hasYrDeduction ? `+${eur(item.taxDeductionQuota || 0)}` : '€ 0')
-                          : 'Esclusa'}
-                      </td>
-                      <td className={`mf-td-num ${item.netCashFlow >= 0 ? 'mf-pos' : 'mf-neg'}`}>
-                        {seur(item.netCashFlow)}
-                      </td>
-                      {config.enableEtfBenchmark && (
-                        <td className="mf-td-num mf-warn">{eur(item.etfWorldBenchmarkValue)}</td>
-                      )}
-                    </tr>
-                  );
-                })}
+                {Array.from(new Set([1, 3, 5, 10, config.simulationPayoffAmount ? (config.simulationPayoffYear || 3) : 1]))
+                  .sort((a, b) => a - b)
+                  .map(yr => {
+                    const item = projections[yr - 1];
+                    if (!item) return null;
+                    const hasYrDeduction = (item.taxDeductionQuota || 0) > 0;
+                    const isPayoff = item.isPayoffYear;
+                    return (
+                      <tr key={yr} style={{ background: isPayoff ? 'rgba(56, 189, 248, 0.08)' : undefined }}>
+                        <td className="mf-td-year">
+                          {yr} {yr === 1 ? 'Anno' : 'Anni'} ({item.calendarYear || baseYear + yr - 1})
+                          {isPayoff && (
+                            <span style={{ marginLeft: 6, fontSize: 9, color: '#38bdf8', border: '1px solid rgba(56,189,248,0.4)', borderRadius: 3, padding: '1px 3px' }}>
+                              Estinzione
+                            </span>
+                          )}
+                        </td>
+                        <td className="mf-td-num">{eur(item.propertyValue)}</td>
+                        <td className="mf-td-num mf-accent">{eur(item.accumulatedEquity)}</td>
+                        <td className="mf-td-num mf-neg">{eur(item.remainingMortgageDebt)}</td>
+                        <td className="mf-td-num" style={{ color: item.annualMortgagePayment ? '#fca5a5' : 'var(--dim)' }}>
+                          {item.annualMortgagePayment ? eur(item.annualMortgagePayment) : '€ 0'}
+                        </td>
+                        <td className="mf-td-num">{eur(item.annualNetRent)}</td>
+                        <td className="mf-td-num" style={{ color: hasYrDeduction ? '#c084fc' : 'var(--dim)' }}>
+                          {config.includeTaxDeductions !== false
+                            ? (hasYrDeduction ? `+${eur(item.taxDeductionQuota || 0)}` : '€ 0')
+                            : 'Esclusa'}
+                        </td>
+                        <td className={`mf-td-num ${item.netCashFlow >= 0 ? 'mf-pos' : 'mf-neg'}`}>
+                          {seur(item.netCashFlow)}
+                        </td>
+                        {config.enableEtfBenchmark && (
+                          <td className="mf-td-num mf-warn">{eur(item.etfWorldBenchmarkValue)}</td>
+                        )}
+                      </tr>
+                    );
+                  })}
               </tbody>
             </table>
           </div>
@@ -627,4 +869,16 @@ const MF_STYLES = `
 .mf-pos { color: #2fd6a3; }
 .mf-neg { color: #fb6f86; }
 .mf-warn { color: #f5b942; }
+
+.mf-btn-payoff {
+  background: linear-gradient(135deg, #0284c7 0%, #0369a1 100%);
+  color: #fff;
+  border-radius: 7px;
+  box-shadow: 0 4px 14px -4px rgba(2, 132, 199, 0.4);
+  transition: all 0.2s ease;
+}
+.mf-btn-payoff:hover {
+  filter: brightness(1.15);
+  transform: translateY(-1px);
+}
 `;
