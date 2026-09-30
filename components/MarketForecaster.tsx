@@ -42,6 +42,39 @@ const CustomChartTooltip = ({ active, payload, label }: any) => {
           <span className="mf-tt-val" style={{ color: '#c084fc' }}>+{eur(pData.taxDeduction)}/anno</span>
         </div>
       )}
+      {(pData?.annualMortgagePayment || 0) > 0 && (
+        <>
+          <div className="mf-tt-row" style={{ borderTop: '1px dashed rgba(255,255,255,0.15)', marginTop: 4, paddingTop: 4, fontSize: 10.5 }}>
+            <span className="mf-tt-dot" style={{ background: '#38bdf8' }} />
+            <span className="mf-tt-name" style={{ color: '#bae6fd' }}>Rata Mutuo Annua:</span>
+            <span className="mf-tt-val" style={{ color: '#bae6fd' }}>
+              {eur(pData.annualMortgagePayment)}
+              {pData.mortgageMonthsPaid < 12 ? ` (${pData.mortgageMonthsPaid} rate)` : ''}
+            </span>
+          </div>
+          {(pData?.annualPrincipalPayment || 0) > 0 && (
+            <div className="mf-tt-row" style={{ fontSize: 10 }}>
+              <span className="mf-tt-dot" style={{ background: '#34d399' }} />
+              <span className="mf-tt-name" style={{ color: '#a7f3d0' }}>↳ Quota Capitale:</span>
+              <span className="mf-tt-val" style={{ color: '#34d399' }}>+{eur(pData.annualPrincipalPayment)} (Equity)</span>
+            </div>
+          )}
+          {(pData?.annualInterestPayment || 0) > 0 && (
+            <div className="mf-tt-row" style={{ fontSize: 10 }}>
+              <span className="mf-tt-dot" style={{ background: '#f87171' }} />
+              <span className="mf-tt-name" style={{ color: '#fca5a5' }}>↳ Quota Interessi:</span>
+              <span className="mf-tt-val" style={{ color: '#f87171' }}>{eur(pData.annualInterestPayment)} (Costo banca)</span>
+            </div>
+          )}
+        </>
+      )}
+      {pData?.ownershipMonths != null && pData?.ownershipMonths < 12 && (
+        <div className="mf-tt-row" style={{ fontSize: 10.5, color: '#38bdf8' }}>
+          <span className="mf-tt-dot" style={{ background: '#38bdf8' }} />
+          <span className="mf-tt-name">Possesso Anno:</span>
+          <span className="mf-tt-val">{pData.ownershipMonths} mesi su 12</span>
+        </div>
+      )}
       {pData?.netCashFlow != null && (
         <div className="mf-tt-row">
           <span className="mf-tt-dot" style={{ background: pData.netCashFlow >= 0 ? '#10b981' : '#f43f5e' }} />
@@ -200,6 +233,13 @@ export const MarketForecaster: React.FC<MarketForecasterProps> = ({ property, on
     netCashFlow: p.netCashFlow,
     taxDeduction: p.taxDeductionQuota || 0,
     netCashFlowWithoutTax: p.netCashFlowWithoutTax || p.netCashFlow,
+    annualMortgagePayment: p.annualMortgagePayment,
+    annualPrincipalPayment: p.annualPrincipalPayment,
+    annualInterestPayment: p.annualInterestPayment,
+    cumulativePrincipalPaid: p.cumulativePrincipalPaid,
+    cumulativeInterestPaid: p.cumulativeInterestPaid,
+    mortgageMonthsPaid: p.mortgageMonthsPaid,
+    ownershipMonths: p.ownershipMonths,
     isPayoffYear: p.isPayoffYear
   }));
 
@@ -216,7 +256,14 @@ export const MarketForecaster: React.FC<MarketForecasterProps> = ({ property, on
           <div className="mf-eyebrow">Modulo 5 · Motore Previsionale Finanziario</div>
           <h2 className="mf-title">Trend Prezzi &amp; Simulazione Mercato (1-10 Anni)</h2>
           <p className="mf-sub">
-            Orizzonte decennale dall'acquisto ({baseYear}) al {baseYear + 9} · Direttiva Case Verdi, Estinzioni Mutuo &amp; Benchmark ETF
+            Orizzonte decennale dall'acquisto ({baseYear}) al {baseYear + 9}
+            {forecastData.ownershipMonthsYear1 != null && forecastData.ownershipMonthsYear1 < 12 && (
+              <span> · 📅 Anno 1: {forecastData.ownershipMonthsYear1} mesi possesso</span>
+            )}
+            {forecastData.mortgageMonthsYear1 != null && forecastData.mortgageMonthsYear1 < 12 && (
+              <span> · 🏦 Mutuo Anno 1: {forecastData.mortgageMonthsYear1} rate pagate</span>
+            )}
+            {' · '}Direttiva Case Verdi, Estinzioni Mutuo &amp; Benchmark ETF
           </p>
         </div>
         <button className="mf-btn mf-btn-primary" onClick={handleSave}>
@@ -521,6 +568,65 @@ export const MarketForecaster: React.FC<MarketForecasterProps> = ({ property, on
               </div>
             )}
           </div>
+          {/* RIEPILOGO FINANZIAMENTO MUTUO A SCADENZA */}
+          {hasMortgage && (
+            <div className="mf-toggle-card" style={{ flexDirection: 'column', alignItems: 'stretch', gap: 10, background: 'rgba(15, 23, 42, 0.5)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span className="mf-toggle-title" style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span>📑</span>
+                  <span>Piano Mutuo a Scadenza</span>
+                </span>
+                <span style={{ fontSize: 10, color: 'var(--dim)', fontFamily: 'var(--mono)' }}>
+                  {property.financials?.mortgageDuration || 30} anni
+                </span>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, fontSize: 11 }}>
+                <div style={{ background: 'rgba(255, 255, 255, 0.03)', padding: '6px 8px', borderRadius: 6 }}>
+                  <span style={{ color: 'var(--dim)', fontSize: 9.5, display: 'block' }}>Capitale Erogato:</span>
+                  <strong style={{ color: '#38bdf8', fontFamily: 'var(--mono)' }}>{eur(forecastData.initialLoanPrincipal || 0)}</strong>
+                </div>
+
+                <div style={{ background: 'rgba(255, 255, 255, 0.03)', padding: '6px 8px', borderRadius: 6 }}>
+                  <span style={{ color: 'var(--dim)', fontSize: 9.5, display: 'block' }}>Interessi a Scadenza:</span>
+                  <strong style={{ color: '#f87171', fontFamily: 'var(--mono)' }}>{eur(forecastData.totalMortgageInterestLifetime || 0)}</strong>
+                </div>
+
+                <div style={{ gridColumn: 'span 2', background: 'rgba(56, 189, 248, 0.06)', border: '1px solid rgba(56, 189, 248, 0.2)', padding: '6px 8px', borderRadius: 6, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div>
+                    <span style={{ color: 'var(--dim)', fontSize: 9.5, display: 'block' }}>Totale (Capitale + Interessi):</span>
+                    <strong style={{ color: '#38bdf8', fontFamily: 'var(--mono)', fontSize: 13 }}>
+                      {eur(forecastData.totalMortgageCostLifetime || 0)}
+                    </strong>
+                  </div>
+                  <div style={{ textAlign: 'right' }}>
+                    <span style={{ color: 'var(--dim)', fontSize: 9, display: 'block' }}>Tasso Applicato:</span>
+                    <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: '#fcd34d' }}>
+                      {forecastData.effectiveMortgageRate}%/a
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Tasso Mutuo Custom Input */}
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginTop: 2 }}>
+                <label className="mf-field-label" style={{ fontSize: 10, color: 'var(--dim)', marginBottom: 0 }}>
+                  Personalizza Tasso Annuo (%):
+                </label>
+                <input
+                  type="number"
+                  step="0.05"
+                  min="0.1"
+                  max="15"
+                  placeholder="Es. 2.9"
+                  className="mf-select"
+                  style={{ width: 85, fontFamily: 'var(--mono)', padding: '4px 6px', fontSize: 11, textAlign: 'right' }}
+                  value={config.simulationMortgageRate ?? 3.5}
+                  onChange={e => handleConfigChange('simulationMortgageRate', Math.max(0.1, parseFloat(e.target.value) || 3.5))}
+                />
+              </div>
+            </div>
+          )}
 
           {/* SIMULATORE ESTINZIONI PARZIALI MUTUO */}
           {hasMortgage && (
@@ -759,6 +865,11 @@ export const MarketForecaster: React.FC<MarketForecasterProps> = ({ property, on
                       <tr key={yr} style={{ background: isPayoff ? 'rgba(56, 189, 248, 0.08)' : undefined }}>
                         <td className="mf-td-year">
                           {yr} {yr === 1 ? 'Anno' : 'Anni'} ({item.calendarYear || baseYear + yr - 1})
+                          {item.ownershipMonths != null && item.ownershipMonths < 12 && (
+                            <span style={{ display: 'block', fontSize: 9.5, color: '#38bdf8' }}>
+                              ({item.ownershipMonths} mesi possesso)
+                            </span>
+                          )}
                           {isPayoff && (
                             <span style={{ marginLeft: 6, fontSize: 9, color: '#38bdf8', border: '1px solid rgba(56,189,248,0.4)', borderRadius: 3, padding: '1px 3px' }}>
                               Estinzione
@@ -770,6 +881,21 @@ export const MarketForecaster: React.FC<MarketForecasterProps> = ({ property, on
                         <td className="mf-td-num mf-neg">{eur(item.remainingMortgageDebt)}</td>
                         <td className="mf-td-num" style={{ color: item.annualMortgagePayment ? '#fca5a5' : 'var(--dim)' }}>
                           {item.annualMortgagePayment ? eur(item.annualMortgagePayment) : '€ 0'}
+                          {item.mortgageMonthsPaid != null && item.mortgageMonthsPaid < 12 && (item.annualMortgagePayment || 0) > 0 && (
+                            <span style={{ display: 'block', fontSize: 9.5, color: '#f59e0b' }}>
+                              ({item.mortgageMonthsPaid} rate)
+                            </span>
+                          )}
+                          {(item.annualPrincipalPayment || 0) > 0 && (
+                            <span style={{ display: 'block', fontSize: 9, color: '#34d399', fontFamily: 'var(--mono)' }}>
+                              Cap: +{eur(item.annualPrincipalPayment || 0)}
+                            </span>
+                          )}
+                          {(item.annualInterestPayment || 0) > 0 && (
+                            <span style={{ display: 'block', fontSize: 9, color: '#f87171', fontFamily: 'var(--mono)' }}>
+                              Int: -{eur(item.annualInterestPayment || 0)}
+                            </span>
+                          )}
                         </td>
                         <td className="mf-td-num">{eur(item.annualNetRent)}</td>
                         <td className="mf-td-num" style={{ color: hasYrDeduction ? '#c084fc' : 'var(--dim)' }}>

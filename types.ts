@@ -192,6 +192,7 @@ export interface ForecastSimulationConfig {
   simulationPayoffAmount?: number; // Importo estinzione anticipata parziale (es. 10.000 €)
   simulationPayoffYear?: number; // Anno di esecuzione estinzione (1-10)
   simulationPayoffStrategy?: 'REDUCE_INSTALLMENT' | 'REDUCE_DURATION'; // Riduci rata vs riduci durata
+  simulationMortgageRate?: number; // Tasso mutuo personalizzabile in simulazione (es. 2.9% o 3.5%)
 }
 
 export interface MortgagePayoffSimulationSummary {
@@ -229,6 +230,12 @@ export interface YearlyForecastResult {
   taxDeductionQuota?: number;
   netCashFlowWithoutTax?: number;
   annualMortgagePayment?: number;
+  annualPrincipalPayment?: number; // Quota Capitale rimborsata nell'anno
+  annualInterestPayment?: number; // Quota Interessi pagata nell'anno
+  cumulativePrincipalPaid?: number; // Capitale cumulativo rimborsato finora
+  cumulativeInterestPaid?: number; // Interessi cumulativi pagati finora
+  mortgageMonthsPaid?: number;
+  ownershipMonths?: number;
   isPayoffYear?: boolean;
 }
 
@@ -238,6 +245,15 @@ export interface PropertyForecastData {
   metrics: MicroMarketMetrics;
   lastSimulatedAt: string;
   baseYear?: number; // Anno reale d'acquisto (es. 2021)
+  purchaseMonth?: number; // Mese reale di acquisto (1-12)
+  ownershipMonthsYear1?: number; // Mesi possesso nel 1° anno
+  mortgageStartYear?: number;
+  mortgageStartMonth?: number;
+  mortgageMonthsYear1?: number; // Rate mutuo pagate nel 1° anno
+  initialLoanPrincipal?: number; // Capitale iniziale preso a mutuo
+  totalMortgageInterestLifetime?: number; // Totale quota interessi su intero mutuo
+  totalMortgageCostLifetime?: number; // Totale complessivo Capitale + Interessi a scadenza (es. ~430.000 €)
+  effectiveMortgageRate?: number; // Tasso annuo applicato (%)
   mortgagePayoffSummary?: MortgagePayoffSimulationSummary;
 }
 
