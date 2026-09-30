@@ -237,6 +237,7 @@ export interface YearlyForecastResult {
   mortgageMonthsPaid?: number;
   ownershipMonths?: number;
   isPayoffYear?: boolean;
+  isRecordedValuation?: boolean;
 }
 
 export interface PropertyForecastData {

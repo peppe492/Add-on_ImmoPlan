@@ -22,6 +22,11 @@ const CustomChartTooltip = ({ active, payload, label }: any) => {
     <div className="mf-tooltip">
       <div className="mf-tt-label">
         Proiezione Anno {label} {calY ? `(${calY})` : ''}
+        {pData?.isRecordedValuation && (
+          <span style={{ marginLeft: 6, fontSize: 9.5, color: '#34d399', background: 'rgba(52,211,153,0.2)', padding: '2px 5px', borderRadius: 4 }}>
+            STIMA REALE
+          </span>
+        )}
         {pData?.isPayoffYear && (
           <span style={{ marginLeft: 6, fontSize: 9.5, color: '#38bdf8', background: 'rgba(56,189,248,0.2)', padding: '2px 5px', borderRadius: 4 }}>
             ESTINZIONE MUTUO
@@ -242,7 +247,8 @@ export const MarketForecaster: React.FC<MarketForecasterProps> = ({ property, on
     cumulativeInterestPaid: p.cumulativeInterestPaid,
     mortgageMonthsPaid: p.mortgageMonthsPaid,
     ownershipMonths: p.ownershipMonths,
-    isPayoffYear: p.isPayoffYear
+    isPayoffYear: p.isPayoffYear,
+    isRecordedValuation: p.isRecordedValuation
   }));
 
   const hasMortgage = (property.financials?.mortgageAmount && property.financials.mortgageAmount > 0) ||
@@ -878,7 +884,14 @@ export const MarketForecaster: React.FC<MarketForecasterProps> = ({ property, on
                             </span>
                           )}
                         </td>
-                        <td className="mf-td-num">{eur(item.propertyValue)}</td>
+                        <td className="mf-td-num">
+                          {eur(item.propertyValue)}
+                          {item.isRecordedValuation && (
+                            <span style={{ display: 'block', fontSize: 9.5, color: '#34d399' }}>
+                              (Stima reale)
+                            </span>
+                          )}
+                        </td>
                         <td className="mf-td-num mf-accent">{eur(item.accumulatedEquity)}</td>
                         <td className="mf-td-num mf-neg">{eur(item.remainingMortgageDebt)}</td>
                         <td className="mf-td-num" style={{ color: item.annualMortgagePayment ? '#fca5a5' : 'var(--dim)' }}>
