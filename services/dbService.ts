@@ -20,6 +20,14 @@ export const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettings = {
     notifyOwnerOnDue: true,
     notifyTenantOnDue: false,
     autoSendReceiptToTenant: false
+  },
+  mortgageRadar: {
+    enabled: true,
+    autoTelegramAlert: true,
+    minMonthlySavings: 30,
+    minRateDeltaBps: 25,
+    preferredRateType: 'ALL',
+    checkIntervalHours: 24
   }
 };
 
@@ -570,7 +578,8 @@ export class ImmoPlanDB {
       ...DEFAULT_NOTIFICATION_SETTINGS,
       ...saved,
       homeAssistant: { ...DEFAULT_NOTIFICATION_SETTINGS.homeAssistant, ...(saved.homeAssistant || {}) },
-      telegram: { ...DEFAULT_NOTIFICATION_SETTINGS.telegram, ...(saved.telegram || {}) }
+      telegram: { ...DEFAULT_NOTIFICATION_SETTINGS.telegram, ...(saved.telegram || {}) },
+      mortgageRadar: { ...DEFAULT_NOTIFICATION_SETTINGS.mortgageRadar!, ...(saved.mortgageRadar || {}) }
     };
   }
 

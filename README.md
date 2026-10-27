@@ -1,10 +1,25 @@
 # 🏠 MM's PROPERTY - Real Estate Management AI
 
-**MM's PROPERTY** (v1.5.0) è una piattaforma *all-in-one* ibrida per la gestione avanzata di investimenti immobiliari, ristrutturazioni, locazioni, detrazioni fiscali e proiezioni previsionali di mercato. Progettata per investitori e property manager, combina modelli matematico-finanziari rigorosi con la potenza dell'Intelligenza Artificiale Generativa (Google Gemini) e l'integrazione IoT con Home Assistant.
+**MM's PROPERTY** (v1.6.0) è una piattaforma *all-in-one* ibrida per la gestione avanzata di investimenti immobiliari, ristrutturazioni, locazioni, surroghe mutuo, detrazioni fiscali e proiezioni previsionali di mercato. Progettata per investitori e property manager, combina modelli matematico-finanziari rigorosi con la potenza dell'Intelligenza Artificiale Generativa (Google Gemini) e l'integrazione IoT con Home Assistant.
 
 L'applicazione è **cross-platform**: funziona sia come applicazione Desktop nativa che come Add-on integrato in Home Assistant.
 
 ![Dashboard Preview](./dashboard.png)
+
+---
+
+## 🚀 Novità Versione 1.6.0
+
+*   🏦 **Storico Surroghe & Rinegoziazioni Mutuo Multi-Evento:**
+    *   **Timeline Cronologica delle Surroghe:** Possibilità di registrare una o più surroghe/rinegoziazioni successive per ciascun immobile (data di decorrenza, nuova banca, nuova rata mensile, nuovo TAN %, tipologia tasso Fisso/Variabile, nuova durata in anni, capitale residuo e contratto allegato PDF).
+    *   **Risoluzione Temporale Intelligente:** La Dashboard Patrimonio, il Registro Affitti, il Calendario Scadenze e il Simulatore a 10 Anni applicano automaticamente la rata originaria per i periodi antecedenti alla surroga e la nuova rata per i periodi successivi, preservando l'accuratezza storica.
+    *   **Calcolo Automatico del Beneficio:** Banner di confronto *Mutuo Originario vs Condizione Attuale* con calcolo del risparmio mensile (`€/mese`), annuo (`€/anno`) e complessivo residuo a scadenza.
+
+*   📡 **Radar Tassi Banche (Italia & Piazza di Milano) & Alert Telegram:**
+    *   **Monitoraggio di 19 Offerte di Surroga (Fisso, Variabile e Mutuo Green):** Catalogo di istituti nazionali e banche radicate su Milano e Lombardia (*BCC Milano*, *Banco BPM Milano*, *Webank Milano*, *Intesa Sanpaolo*, *UniCredit*, *Mediobanca Premier*, *Crédit Agricole*, *BPER Banca*, *BNL*, *FinecoBank*, *ING*, *Credem*, *Banca Sella*).
+    *   **Indici Eurirs / Euribor & Grounding AI:** Aggiornamento tassi basato su indici **IRS 10A/15A/20A/25A/30A**, **Euribor 3M** e **Tasso BCE**, con ricerca live tramite Google Gemini Search Grounding.
+    *   **Confronto Automatico & Pre-compilazione 1-Click:** Calcolo con ammortamento alla francese della nuova rata simulata e del risparmio netto per ogni immobile, con pulsante *"Usa per Surroga"* per compilare istantaneamente la scheda surroga.
+    *   **Report Telegram Automatico e On-Demand:** Invio di report dettagliati su Telegram quando viene rilevata un'offerta vantaggiosa sopra la soglia configurata (`€/mese` e riduzione `%` tasso) ed esposizione del sensore `sensor.immoplan_radar_mutui` su Home Assistant.
 
 ---
 

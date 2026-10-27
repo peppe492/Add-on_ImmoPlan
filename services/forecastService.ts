@@ -5,6 +5,7 @@ import {
   YearlyForecastResult,
   PropertyForecastData
 } from '../types';
+import { getLatestOrActiveMortgage, getPropertySubrogations } from './mortgageService';
 
 /**
  * Returns default simulation configuration parameters for a property.
@@ -100,25 +101,79 @@ export const calculatePropertyForecast = (
   const initialValue = property.currentValue > 0 ? property.currentValue : (property.purchasePrice || 200000);
   const purchasePrice = property.purchasePrice || initialValue;
 
-  // 1. Calculate Initial Loan Amount & Monthly Payment
-  let initialLoanAmount = 0;
-  let monthlyMortgagePayment = 0;
-  let durationYears = property.financials?.mortgageDuration || 20;
-  let mortgageRate = property.financials?.mortgageRate || 3.5;
+  // 1. Calculate Original Purchase Loan (for initialCashEquity) & Active Mortgage State
+  const subs = getPropertySubrogations(property);
+  const now = new Date();
+  const activeMortgage = subs.length > 0 ? getLatestOrActiveMortgage(property, now) : null;
 
-  // BCE Interest Rate Scenario adjustment on mortgage rate
-  if (config.bceInterestRateScenario === 'RISING') {
-    mortgageRate += 0.75;
-  } else if (config.bceInterestRateScenario === 'FALLING') {
-    mortgageRate = Math.max(0.5, mortgageRate - 0.75);
-  }
+  const adjustRateForBce = (baseRate: number): number => {
+    let r = baseRate;
+    if (config.bceInterestRateScenario === 'RISING') {
+      r += 0.75;
+    } else if (config.bceInterestRateScenario === 'FALLING') {
+      r = Math.max(0, r - 0.75);
+    }
+    return r;
+  };
 
+  const computeAnnuityPrincipal = (monthlyPmt: number, annualRate: number, durYears: number): number => {
+    const n = Math.max(1, durYears * 12);
+    if (annualRate <= 0) return monthlyPmt * n;
+    const r = annualRate / 12 / 100;
+    return monthlyPmt * (1 - Math.pow(1 + r, -n)) / r;
+  };
+
+  // Determine original loan at purchase for accurate initialCashEquity estimation
+  const origDuration = property.financials?.mortgageDuration || 20;
+  const origRate = adjustRateForBce(
+    property.financials?.mortgageRate !== undefined && property.financials?.mortgageRate !== null
+      ? property.financials.mortgageRate
+      : 3.5
+  );
+  let originalPurchaseLoan = 0;
   if (property.financials?.mortgageAmount && property.financials.mortgageAmount > 0) {
     if (property.financials.mortgageAmount > 10000) {
+      originalPurchaseLoan = property.financials.mortgageAmount;
+    } else {
+      originalPurchaseLoan = computeAnnuityPrincipal(property.financials.mortgageAmount, origRate, origDuration);
+    }
+  } else if (property.recurringCosts) {
+    const mortCost = property.recurringCosts.find(c => c.category === 'MORTGAGE');
+    if (mortCost && mortCost.amount > 0) {
+      const mPmt = mortCost.frequency === 'MONTHLY' ? mortCost.amount : mortCost.amount / 12;
+      originalPurchaseLoan = computeAnnuityPrincipal(mPmt, origRate, origDuration);
+    }
+  }
+
+  let durationYears = activeMortgage
+    ? (activeMortgage.durationYears || origDuration)
+    : origDuration;
+  let mortgageRate = adjustRateForBce(
+    activeMortgage && activeMortgage.rate !== undefined && activeMortgage.rate !== null
+      ? activeMortgage.rate
+      : (property.financials?.mortgageRate !== undefined && property.financials?.mortgageRate !== null
+          ? property.financials.mortgageRate
+          : 3.5)
+  );
+
+  let initialLoanAmount = 0;
+  let monthlyMortgagePayment = 0;
+
+  if (activeMortgage && activeMortgage.isSubrogated) {
+    monthlyMortgagePayment = activeMortgage.configuredMonthlyPayment;
+    if (activeMortgage.residualPrincipal && activeMortgage.residualPrincipal > 0) {
+      initialLoanAmount = activeMortgage.residualPrincipal;
+    }
+  } else if (property.financials?.mortgageAmount && property.financials.mortgageAmount > 0) {
+    if (property.financials.mortgageAmount > 10000) {
       initialLoanAmount = property.financials.mortgageAmount;
-      const r = (mortgageRate > 0 ? mortgageRate : 3.5) / 12 / 100;
       const n = durationYears * 12;
-      monthlyMortgagePayment = initialLoanAmount * (r * Math.pow(1 + r, n)) / (Math.pow(1 + r, n) - 1);
+      if (mortgageRate <= 0) {
+        monthlyMortgagePayment = initialLoanAmount / n;
+      } else {
+        const r = mortgageRate / 12 / 100;
+        monthlyMortgagePayment = initialLoanAmount * (r * Math.pow(1 + r, n)) / (Math.pow(1 + r, n) - 1);
+      }
     } else {
       monthlyMortgagePayment = property.financials.mortgageAmount;
     }
@@ -130,17 +185,28 @@ export const calculatePropertyForecast = (
   }
 
   if (initialLoanAmount === 0 && monthlyMortgagePayment > 0) {
-    const r = (mortgageRate > 0 ? mortgageRate : 3.5) / 12 / 100;
-    const n = durationYears * 12;
-    // Exact Annuity Present Value Formula
-    initialLoanAmount = monthlyMortgagePayment * (1 - Math.pow(1 + r, -n)) / r;
+    initialLoanAmount = computeAnnuityPrincipal(monthlyMortgagePayment, mortgageRate, durationYears);
+  }
+
+  // Compute months already elapsed on the active subrogation prior to the forecast start
+  let elapsedMonthsBeforeForecast = 0;
+  if (activeMortgage && activeMortgage.isSubrogated && activeMortgage.startDate) {
+    const sParts = activeMortgage.startDate.split('-');
+    if (sParts.length >= 2) {
+      const sY = parseInt(sParts[0], 10);
+      const sM = parseInt(sParts[1], 10) - 1;
+      if (!isNaN(sY) && !isNaN(sM)) {
+        elapsedMonthsBeforeForecast = Math.max(0, (now.getFullYear() - sY) * 12 + (now.getMonth() - sM));
+      }
+    }
   }
 
   // Estimated purchase costs ~ 8% of purchase price (notary, agency, taxes)
   const purchaseExpenses = purchasePrice * 0.08;
+  const referenceLoanForEquity = originalPurchaseLoan > 0 ? originalPurchaseLoan : initialLoanAmount;
   const initialCashEquity = property.financials?.initialInvestment || Math.max(
     10000,
-    purchasePrice + purchaseExpenses - initialLoanAmount
+    purchasePrice + purchaseExpenses - referenceLoanForEquity
   );
 
   // 2. Growth Factors & Adjustments
@@ -224,14 +290,19 @@ export const calculatePropertyForecast = (
     // Net operating rent (allows negative values when vacancy or operating expenses exceed rent)
     const annualNetRent = effectiveGrossRent - taxAmount - annualOperatingExpenses;
 
-    // Mortgage Amortization & Debt
+    // Mortgage Amortization & Debt (accounting for months already elapsed on active subrogation)
+    const effectiveYearsElapsed = (elapsedMonthsBeforeForecast / 12) + year;
     const { remainingDebt, monthlyInstallment } = calculateRemainingMortgageDebt(
       initialLoanAmount,
       mortgageRate,
       durationYears,
-      year
+      effectiveYearsElapsed
     );
-    const annualMortgagePayment = monthlyMortgagePayment > 0 ? monthlyMortgagePayment * 12 : monthlyInstallment * 12;
+    const windowStartMonth = elapsedMonthsBeforeForecast + (year - 1) * 12;
+    const totalDurationMonths = durationYears * 12;
+    const activeMonthsInYear = Math.max(0, Math.min(12, totalDurationMonths - windowStartMonth));
+    const effectiveMonthlyPmt = monthlyMortgagePayment > 0 ? monthlyMortgagePayment : monthlyInstallment;
+    const annualMortgagePayment = activeMonthsInYear > 0 ? effectiveMonthlyPmt * activeMonthsInYear : 0;
 
     // Net Cash Flow & 730 Tax Deductions Integration
     const currentYear = new Date().getFullYear();

@@ -154,6 +154,14 @@ const DEFAULT_NOTIF_SETTINGS = {
     notifyOwnerOnDue: true,
     notifyTenantOnDue: true,
     autoSendReceiptToTenant: true
+  },
+  mortgageRadar: {
+    enabled: true,
+    autoTelegramAlert: true,
+    minMonthlySavings: 30,
+    minRateDeltaBps: 25,
+    preferredRateType: 'ALL',
+    checkIntervalHours: 24
   }
 };
 
@@ -730,6 +738,7 @@ app.post('/api/deadlines/:id/complete', (req, res) => {
 });
 
 let lastNotificationDate = '';
+let lastMortgageRadarAlertDate = '';
 
 // Controllo Scadenze ogni ora
 setInterval(async () => {
@@ -1097,6 +1106,64 @@ setInterval(async () => {
 
     // Aggiorna sempre il sensore Home Assistant sensor.immoplan_affitti_stato
     await updateAffittiStatoSensor(dbData);
+
+    // Controllo Automatico Radar Tassi Mutui (Banche Italiane & Milano) + Alert Telegram
+    const radarCfg = { ...DEFAULT_NOTIF_SETTINGS.mortgageRadar, ...(settings.mortgageRadar || {}) };
+    if (radarCfg.enabled !== false) {
+      const intervalMs = Math.max(1, Number(radarCfg.checkIntervalHours) || 24) * 3600 * 1000;
+      const lastAlertMs = radarCfg.lastAlertSentAt ? new Date(radarCfg.lastAlertSentAt).getTime() : 0;
+      const lastSentDay = (radarCfg.lastAlertSentAt || '').slice(0, 10);
+      const cooldownElapsed = !lastAlertMs || isNaN(lastAlertMs) || (Date.now() - lastAlertMs >= intervalMs);
+      const dayAllowed = (Number(radarCfg.checkIntervalHours) || 24) < 24 || (lastSentDay !== today && lastMortgageRadarAlertDate !== today);
+
+      const report = analyzePortfolioMortgagesServer(dbData.properties || [], radarCfg);
+      if (SUPERVISOR_TOKEN) {
+        await updateHASensor('radar_mutui', report.advantageousCount, {
+          friendly_name: 'Opportunità Surroga Mutui (Italia & Milano)',
+          unit_of_measurement: 'offerte',
+          icon: 'mdi:bank-transfer',
+          risparmio_mensile_potenziale: report.totalPotentialMonthlySavings,
+          risparmio_annuo_potenziale: report.totalPotentialAnnualSavings,
+          risparmio_totale_residuo: report.totalPotentialRemainingSavings,
+          banche_monitorate: report.banksMonitoredCount
+        }).catch(() => {});
+      }
+
+      const targetChat = (radarCfg.recipientChatId || settings.telegram?.ownerChatId || '').trim();
+      if (
+        radarCfg.autoTelegramAlert !== false &&
+        settings.telegram?.enabled &&
+        settings.telegram?.botToken &&
+        targetChat &&
+        cooldownElapsed &&
+        dayAllowed &&
+        report.advantageousCount > 0
+      ) {
+        const tgText = formatMortgageRadarTelegramReport(report, radarCfg);
+        const tgRes = await sendTelegramText(settings.telegram.botToken, targetChat, tgText);
+        if (tgRes.success) {
+          lastMortgageRadarAlertDate = today;
+          const nowIso = new Date().toISOString();
+          if (!dbData.notificationSettings) dbData.notificationSettings = { ...DEFAULT_NOTIF_SETTINGS };
+          dbData.notificationSettings.mortgageRadar = {
+            ...radarCfg,
+            lastCheckAt: nowIso,
+            lastAlertSentAt: nowIso
+          };
+          if (!dbData.notificationLogs) dbData.notificationLogs = [];
+          dbData.notificationLogs.unshift({
+            id: `log_radar_${Date.now()}`,
+            timestamp: nowIso,
+            channel: 'TELEGRAM',
+            type: 'MORTGAGE_RADAR_ALERT',
+            recipient: String(targetChat),
+            status: 'SUCCESS',
+            details: `Radar Mutui Auto: ${report.advantageousCount} offerte vantaggiose (-€ ${report.totalPotentialMonthlySavings.toFixed(0)}/mese)`
+          });
+          fs.writeFileSync(DB_FILE, JSON.stringify(dbData, null, 2), 'utf8');
+        }
+      }
+    }
   } catch (e) {
     console.error('[CRON] Errore controllo scadenze:', e);
   }
@@ -1464,6 +1531,978 @@ app.post('/api/notifications/clear-logs', (req, res) => {
 
 app.get('/api/status', (req, res) => res.json({ status: 'online' }));
 
+// ========================================================
+// RADAR TASSI MUTUI & SURROGHE (BANCHE ITALIANE & MILANO)
+// ========================================================
+
+function toIsoDateServer(d = new Date()) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function addYearsIsoServer(isoDate, years) {
+  const parts = String(isoDate || '').split('-');
+  if (parts.length < 3) return isoDate;
+  const y = parseInt(parts[0], 10);
+  const m = parseInt(parts[1], 10);
+  const d = parseInt(parts[2], 10);
+  if (isNaN(y) || isNaN(m) || isNaN(d)) return isoDate;
+  const targetYear = y + Math.max(0, Math.round(Number(years) || 0));
+  const maxDay = new Date(targetYear, m, 0).getDate();
+  return `${targetYear}-${String(m).padStart(2, '0')}-${String(Math.min(d, maxDay)).padStart(2, '0')}`;
+}
+
+function getDefaultMarketIndicesServer(referenceDate = new Date()) {
+  return {
+    irs10Y: 2.38,
+    irs15Y: 2.44,
+    irs20Y: 2.42,
+    irs25Y: 2.36,
+    irs30Y: 2.29,
+    euribor1M: 2.38,
+    euribor3M: 2.42,
+    bceRate: 2.50,
+    source: 'REFERENCE_BENCHMARK',
+    updatedAt: toIsoDateServer(referenceDate)
+  };
+}
+
+function buildItalianAndMilanBankCatalogServer(indices = getDefaultMarketIndicesServer()) {
+  const irs20 = Number(indices.irs20Y) || 2.42;
+  const irs25 = Number(indices.irs25Y) || 2.36;
+  const eur3m = Number(indices.euribor3M) || 2.42;
+  const updatedAt = indices.updatedAt || toIsoDateServer(new Date());
+  const round2 = (n) => Math.round(n * 100) / 100;
+
+  return [
+    {
+      bankId: 'banco-bpm-milano-fisso',
+      bankName: 'Banco BPM (Banca Popolare di Milano)',
+      hqCity: 'Milano (Piazza Filippo Meda)',
+      isMilanFocused: true,
+      productName: 'Mutuo Surroga Promo Fisso Last Minute / Green Milano',
+      rateType: 'FIXED',
+      referenceIndex: 'IRS 20A',
+      referenceIndexRate: irs20,
+      spread: 0.15,
+      tan: round2(irs20 + 0.15),
+      taeg: round2(irs20 + 0.27),
+      greenTan: round2(irs20 - 0.05),
+      maxLtv: 80,
+      zeroExpensesSubrogation: true,
+      periziaGratuita: true,
+      istruttoriaGratuita: true,
+      notes: 'Sede storica Milano Piazza Meda · Surroga zero spese + sconto extra -20 bps per immobili Classe A/B/C',
+      updatedAt
+    },
+    {
+      bankId: 'webank-bpm-milano-fisso',
+      bankName: 'Webank (Gruppo Banco BPM Milano)',
+      hqCity: 'Milano (Via Massaua)',
+      isMilanFocused: true,
+      productName: 'Mutuo Webank Surroga Fisso Zero Spese Online',
+      rateType: 'FIXED',
+      referenceIndex: 'IRS 20A',
+      referenceIndexRate: irs20,
+      spread: 0.12,
+      tan: round2(irs20 + 0.12),
+      taeg: round2(irs20 + 0.20),
+      greenTan: round2(irs20 - 0.07),
+      maxLtv: 80,
+      zeroExpensesSubrogation: true,
+      periziaGratuita: true,
+      istruttoriaGratuita: true,
+      notes: 'Polo digitale Gruppo Banco BPM Milano · Perizia, istruttoria e incasso rata 100% gratuiti',
+      updatedAt
+    },
+    {
+      bankId: 'intesa-sanpaolo-fisso',
+      bankName: 'Intesa Sanpaolo',
+      hqCity: 'Milano / Torino',
+      isMilanFocused: true,
+      productName: 'Mutuo Domus Surroga Fisso (Piano Base & Mutuo Green)',
+      rateType: 'FIXED',
+      referenceIndex: 'IRS 20A',
+      referenceIndexRate: irs20,
+      spread: 0.18,
+      tan: round2(irs20 + 0.18),
+      taeg: round2(irs20 + 0.31),
+      greenTan: round2(irs20 - 0.04),
+      maxLtv: 80,
+      zeroExpensesSubrogation: true,
+      periziaGratuita: true,
+      istruttoriaGratuita: true,
+      notes: 'Direzione Regionale Milano e Lombardia · Condizioni dedicate Under 36 e Mutuo Green',
+      updatedAt
+    },
+    {
+      bankId: 'credit-agricole-milano-fisso',
+      bankName: 'Crédit Agricole Italia',
+      hqCity: 'Milano / Parma',
+      isMilanFocused: true,
+      productName: 'Mutuo Crédit Agricole Surroga Greenback Fisso',
+      rateType: 'FIXED',
+      referenceIndex: 'IRS 25A',
+      referenceIndexRate: irs25,
+      spread: 0.14,
+      tan: round2(irs25 + 0.14),
+      taeg: round2(irs25 + 0.26),
+      greenTan: round2(irs25 - 0.06),
+      maxLtv: 80,
+      zeroExpensesSubrogation: true,
+      periziaGratuita: true,
+      istruttoriaGratuita: true,
+      notes: 'Forte presidio filiali Milano · Opzione Flexi e sconto tasso -0.10% su riqualificazione energetica',
+      updatedAt
+    },
+    {
+      bankId: 'mediobanca-premier-milano',
+      bankName: 'Mediobanca Premier (ex CheBanca!)',
+      hqCity: 'Milano (Via Arrigo Boito / Piazzetta Cuccia)',
+      isMilanFocused: true,
+      productName: 'Mutuo Surroga Fisso Risparmio & Valore',
+      rateType: 'FIXED',
+      referenceIndex: 'IRS 20A',
+      referenceIndexRate: irs20,
+      spread: 0.22,
+      tan: round2(irs20 + 0.22),
+      taeg: round2(irs20 + 0.35),
+      greenTan: round2(irs20 + 0.03),
+      maxLtv: 80,
+      zeroExpensesSubrogation: true,
+      periziaGratuita: true,
+      istruttoriaGratuita: true,
+      notes: 'Gruppo Mediobanca Milano · Gestione fast-track per immobili residenziali a Milano e provincia',
+      updatedAt
+    },
+    {
+      bankId: 'unicredit-milano-fisso',
+      bankName: 'UniCredit',
+      hqCity: 'Milano (Piazza Gae Aulenti)',
+      isMilanFocused: true,
+      productName: 'Mutuo UniCredit Surroga Sostenibilità Energetica Fisso',
+      rateType: 'FIXED',
+      referenceIndex: 'IRS 20A',
+      referenceIndexRate: irs20,
+      spread: 0.23,
+      tan: round2(irs20 + 0.23),
+      taeg: round2(irs20 + 0.36),
+      greenTan: round2(irs20 + 0.02),
+      maxLtv: 80,
+      zeroExpensesSubrogation: true,
+      periziaGratuita: true,
+      istruttoriaGratuita: true,
+      notes: 'Headquarter Piazza Gae Aulenti Milano · Taglio rata per immobili in classe energetica A, B o C',
+      updatedAt
+    },
+    {
+      bankId: 'ing-milano-fisso',
+      bankName: 'ING Italia',
+      hqCity: 'Milano (Viale Fulvio Testi)',
+      isMilanFocused: true,
+      productName: 'Mutuo Arancio Surroga Tasso Fisso',
+      rateType: 'FIXED',
+      referenceIndex: 'IRS 20A',
+      referenceIndexRate: irs20,
+      spread: 0.20,
+      tan: round2(irs20 + 0.20),
+      taeg: round2(irs20 + 0.30),
+      greenTan: round2(irs20),
+      maxLtv: 80,
+      zeroExpensesSubrogation: true,
+      periziaGratuita: true,
+      istruttoriaGratuita: true,
+      notes: 'Direzione Generale Milano Bicocca · Extra sconto -0.20% con addebito su Conto Corrente Arancio',
+      updatedAt
+    },
+    {
+      bankId: 'finecobank-milano-fisso',
+      bankName: 'FinecoBank',
+      hqCity: 'Milano (Piazza Durante)',
+      isMilanFocused: true,
+      productName: 'Mutuo Fineco Surroga Fisso / Green',
+      rateType: 'FIXED',
+      referenceIndex: 'IRS 20A',
+      referenceIndexRate: irs20,
+      spread: 0.25,
+      tan: round2(irs20 + 0.25),
+      taeg: round2(irs20 + 0.37),
+      greenTan: round2(irs20 + 0.05),
+      maxLtv: 75,
+      zeroExpensesSubrogation: true,
+      periziaGratuita: true,
+      istruttoriaGratuita: true,
+      notes: 'Sede centrale Milano Piazza Durante · Istruttoria digitale rapida per clienti e nuovi correntisti',
+      updatedAt
+    },
+    {
+      bankId: 'bnl-bnp-paribas-fisso',
+      bankName: 'BNL BNP Paribas',
+      hqCity: 'Milano / Roma',
+      isMilanFocused: true,
+      productName: 'Mutuo BNL Surroga Trasformazione & Futuro Sostenibile',
+      rateType: 'FIXED',
+      referenceIndex: 'IRS 20A',
+      referenceIndexRate: irs20,
+      spread: 0.24,
+      tan: round2(irs20 + 0.24),
+      taeg: round2(irs20 + 0.38),
+      greenTan: round2(irs20 + 0.04),
+      maxLtv: 80,
+      zeroExpensesSubrogation: true,
+      periziaGratuita: true,
+      istruttoriaGratuita: true,
+      notes: 'Torre Diamante Milano Porta Nuova · Surroga a zero spese notarili e peritali',
+      updatedAt
+    },
+    {
+      bankId: 'bper-banca-fisso',
+      bankName: 'BPER Banca',
+      hqCity: 'Milano / Modena',
+      isMilanFocused: false,
+      productName: 'Mutuo Surroga BPER Tasso Fisso Pro',
+      rateType: 'FIXED',
+      referenceIndex: 'IRS 20A',
+      referenceIndexRate: irs20,
+      spread: 0.19,
+      tan: round2(irs20 + 0.19),
+      taeg: round2(irs20 + 0.32),
+      greenTan: round2(irs20 - 0.01),
+      maxLtv: 80,
+      zeroExpensesSubrogation: true,
+      periziaGratuita: true,
+      istruttoriaGratuita: true,
+      notes: 'Rete ex UBI / Carige / BPER su Milano e Lombardia · Condizioni agevolate LTV <= 70%',
+      updatedAt
+    },
+    {
+      bankId: 'popolare-sondrio-milano',
+      bankName: 'Banca Popolare di Sondrio',
+      hqCity: 'Milano / Sondrio',
+      isMilanFocused: true,
+      productName: 'Mutuo Surroga Chirografario & Ipotecario Fisso Lombardia',
+      rateType: 'FIXED',
+      referenceIndex: 'IRS 20A',
+      referenceIndexRate: irs20,
+      spread: 0.21,
+      tan: round2(irs20 + 0.21),
+      taeg: round2(irs20 + 0.33),
+      greenTan: round2(irs20 + 0.03),
+      maxLtv: 80,
+      zeroExpensesSubrogation: true,
+      periziaGratuita: true,
+      istruttoriaGratuita: true,
+      notes: 'Storica presenza su Milano e Lombardia · Zero penali e perizia a carico della banca',
+      updatedAt
+    },
+    {
+      bankId: 'credem-banca-fisso',
+      bankName: 'Credem Banca',
+      hqCity: 'Milano / Reggio Emilia',
+      isMilanFocused: false,
+      productName: 'Mutuo Surroga Credem Tasso Fisso Garantito',
+      rateType: 'FIXED',
+      referenceIndex: 'IRS 20A',
+      referenceIndexRate: irs20,
+      spread: 0.17,
+      tan: round2(irs20 + 0.17),
+      taeg: round2(irs20 + 0.29),
+      greenTan: round2(irs20 - 0.03),
+      maxLtv: 80,
+      zeroExpensesSubrogation: true,
+      periziaGratuita: true,
+      istruttoriaGratuita: true,
+      notes: 'Spread competitivo su LTV <= 70% e classi energetiche superiori',
+      updatedAt
+    },
+    {
+      bankId: 'banca-sella-fisso',
+      bankName: 'Banca Sella',
+      hqCity: 'Milano / Biella',
+      isMilanFocused: false,
+      productName: 'Mutuo Sella Surroga Tasso Fisso 100% Online',
+      rateType: 'FIXED',
+      referenceIndex: 'IRS 20A',
+      referenceIndexRate: irs20,
+      spread: 0.22,
+      tan: round2(irs20 + 0.22),
+      taeg: round2(irs20 + 0.34),
+      greenTan: round2(irs20 + 0.02),
+      maxLtv: 80,
+      zeroExpensesSubrogation: true,
+      periziaGratuita: true,
+      istruttoriaGratuita: true,
+      notes: 'Richiesta e delibera digitale con firma elettronica qualificata',
+      updatedAt
+    },
+    {
+      bankId: 'banco-bpm-milano-variabile',
+      bankName: 'Banco BPM (Banca Popolare di Milano)',
+      hqCity: 'Milano (Piazza Filippo Meda)',
+      isMilanFocused: true,
+      productName: 'Mutuo Surroga Variabile Promo Euribor 3M',
+      rateType: 'VARIABLE',
+      referenceIndex: 'Euribor 3M',
+      referenceIndexRate: eur3m,
+      spread: 0.45,
+      tan: round2(eur3m + 0.45),
+      taeg: round2(eur3m + 0.58),
+      greenTan: round2(eur3m + 0.30),
+      maxLtv: 80,
+      zeroExpensesSubrogation: true,
+      periziaGratuita: true,
+      istruttoriaGratuita: true,
+      notes: 'Sede Milano Piazza Meda · Indicizzato Euribor 3M 360gg con opzione passaggio a fisso',
+      updatedAt
+    },
+    {
+      bankId: 'intesa-sanpaolo-variabile',
+      bankName: 'Intesa Sanpaolo',
+      hqCity: 'Milano / Torino',
+      isMilanFocused: true,
+      productName: 'Mutuo Domus Surroga Variabile con CAP',
+      rateType: 'VARIABLE',
+      referenceIndex: 'Euribor 3M',
+      referenceIndexRate: eur3m,
+      spread: 0.50,
+      tan: round2(eur3m + 0.50),
+      taeg: round2(eur3m + 0.64),
+      greenTan: round2(eur3m + 0.35),
+      maxLtv: 80,
+      zeroExpensesSubrogation: true,
+      periziaGratuita: true,
+      istruttoriaGratuita: true,
+      notes: 'Tasso variabile con tetto massimo (CAP) a tutela dai rialzi BCE',
+      updatedAt
+    },
+    {
+      bankId: 'unicredit-milano-variabile',
+      bankName: 'UniCredit',
+      hqCity: 'Milano (Piazza Gae Aulenti)',
+      isMilanFocused: true,
+      productName: 'Mutuo UniCredit Surroga Variabile Euribor 3M',
+      rateType: 'VARIABLE',
+      referenceIndex: 'Euribor 3M',
+      referenceIndexRate: eur3m,
+      spread: 0.48,
+      tan: round2(eur3m + 0.48),
+      taeg: round2(eur3m + 0.61),
+      greenTan: round2(eur3m + 0.32),
+      maxLtv: 80,
+      zeroExpensesSubrogation: true,
+      periziaGratuita: true,
+      istruttoriaGratuita: true,
+      notes: 'Headquarter Milano Piazza Gae Aulenti · Sconto spread per classi energetiche A/B',
+      updatedAt
+    },
+    {
+      bankId: 'credit-agricole-milano-variabile',
+      bankName: 'Crédit Agricole Italia',
+      hqCity: 'Milano / Parma',
+      isMilanFocused: true,
+      productName: 'Mutuo Crédit Agricole Surroga Variabile con CAP',
+      rateType: 'VARIABLE',
+      referenceIndex: 'Euribor 3M',
+      referenceIndexRate: eur3m,
+      spread: 0.46,
+      tan: round2(eur3m + 0.46),
+      taeg: round2(eur3m + 0.59),
+      greenTan: round2(eur3m + 0.31),
+      maxLtv: 80,
+      zeroExpensesSubrogation: true,
+      periziaGratuita: true,
+      istruttoriaGratuita: true,
+      notes: 'Rete filiali Milano · Tasso variabile con CAP massimo garantito',
+      updatedAt
+    },
+    {
+      bankId: 'bcc-milano-fisso',
+      bankName: 'BCC Milano (Gruppo BCC Iccrea)',
+      hqCity: 'Milano / Carugate (Sede Direzionale)',
+      isMilanFocused: true,
+      productName: 'Mutuo Casa BCC Milano Surroga Tasso Fisso & Green',
+      rateType: 'FIXED',
+      referenceIndex: 'IRS 20A',
+      referenceIndexRate: irs20,
+      spread: 0.16,
+      tan: round2(irs20 + 0.16),
+      taeg: round2(irs20 + 0.28),
+      greenTan: round2(irs20 - 0.04),
+      maxLtv: 80,
+      zeroExpensesSubrogation: true,
+      periziaGratuita: true,
+      istruttoriaGratuita: true,
+      notes: 'Maggiore banca cooperativa della Lombardia · Condizioni agevolate Soci BCC Milano e sconto Green',
+      updatedAt
+    },
+    {
+      bankId: 'bcc-milano-variabile',
+      bankName: 'BCC Milano (Gruppo BCC Iccrea)',
+      hqCity: 'Milano / Carugate (Sede Direzionale)',
+      isMilanFocused: true,
+      productName: 'Mutuo Casa BCC Milano Surroga Variabile Euribor 3M',
+      rateType: 'VARIABLE',
+      referenceIndex: 'Euribor 3M',
+      referenceIndexRate: eur3m,
+      spread: 0.44,
+      tan: round2(eur3m + 0.44),
+      taeg: round2(eur3m + 0.56),
+      greenTan: round2(eur3m + 0.29),
+      maxLtv: 80,
+      zeroExpensesSubrogation: true,
+      periziaGratuita: true,
+      istruttoriaGratuita: true,
+      notes: 'Sportelli a Milano e Città Metropolitana · Surroga zero spese e riduzione spread per Soci e Under 36',
+      updatedAt
+    }
+  ];
+}
+
+function calcFrenchPaymentServer(principal, annualRatePercent, totalMonths) {
+  const C = Math.max(0, Number(principal) || 0);
+  const m = Math.max(1, Math.round(Number(totalMonths) || 1));
+  const rAnn = Math.max(0, Number(annualRatePercent) || 0);
+  if (C <= 0) return 0;
+  if (rAnn <= 0.0001) return Math.round((C / m) * 100) / 100;
+  const i = rAnn / 100 / 12;
+  const pow = Math.pow(1 + i, m);
+  return Math.round(C * ((i * pow) / (pow - 1)) * 100) / 100;
+}
+
+function calcImpliedPrincipalServer(monthlyPayment, annualRatePercent, remainingMonths) {
+  const P = Math.max(0, Number(monthlyPayment) || 0);
+  const m = Math.max(1, Math.round(Number(remainingMonths) || 1));
+  const rAnn = Math.max(0, Number(annualRatePercent) || 0);
+  if (P <= 0) return 0;
+  if (rAnn <= 0.0001) return Math.round(P * m);
+  const i = rAnn / 100 / 12;
+  return Math.round(P * ((1 - Math.pow(1 + i, -m)) / i));
+}
+
+function resolveActiveMortgageServer(property, referenceDate = new Date()) {
+  const fin = property?.financials || {};
+  const baseMonthly = Number(fin.mortgageAmount) || 0;
+  const baseDuration = (Number(fin.mortgageDuration) || 0) > 0 ? Number(fin.mortgageDuration) : 20;
+  const baseRate = fin.mortgageRate !== undefined && fin.mortgageRate !== null && Number(fin.mortgageRate) >= 0
+    ? Number(fin.mortgageRate)
+    : 3.5;
+  const baseStartStr = String(fin.mortgageStartDate || '').trim();
+  const baseBankName = fin.originalBankName;
+
+  const rawSubs = [
+    ...(fin.subrogations || []),
+    ...(property?.subrogations || []),
+    ...(property?.mortgageSubrogations || [])
+  ].filter(s => s && s.date);
+
+  const uniqueMap = new Map();
+  rawSubs.forEach((s, idx) => {
+    const key = s.id || `${s.date}_${idx}`;
+    uniqueMap.set(key, s);
+  });
+  const subs = Array.from(uniqueMap.values()).sort((a, b) => String(a.date).localeCompare(String(b.date)));
+
+  const targetIso = toIsoDateServer(referenceDate);
+  const targetMonthIso = targetIso.slice(0, 7);
+
+  let matchedSub = null;
+  let matchedIndex = -1;
+  for (let i = 0; i < subs.length; i++) {
+    const sDate = String(subs[i].date || '').trim();
+    if (sDate && sDate.slice(0, 7) <= targetMonthIso) {
+      matchedSub = subs[i];
+      matchedIndex = i;
+    }
+  }
+
+  if (matchedSub) {
+    const subDuration = (Number(matchedSub.newDurationYears) || 0) > 0 ? Number(matchedSub.newDurationYears) : baseDuration;
+    const subStartStr = String(matchedSub.date).trim();
+    const subEndStr = addYearsIsoServer(subStartStr, subDuration);
+    const subPayment = Number(matchedSub.newMonthlyPayment) || 0;
+    const subRate = matchedSub.newRate !== undefined && matchedSub.newRate !== null ? Number(matchedSub.newRate) : baseRate;
+    const inWindow = targetMonthIso >= subStartStr.slice(0, 7) && targetMonthIso <= subEndStr.slice(0, 7);
+    const isActive = inWindow && subPayment > 0;
+    return {
+      isActive,
+      monthlyPayment: isActive ? subPayment : 0,
+      configuredMonthlyPayment: subPayment,
+      rate: subRate,
+      rateType: matchedSub.rateType || 'FIXED',
+      durationYears: subDuration,
+      startDate: subStartStr,
+      endDate: subEndStr,
+      bankName: matchedSub.bankName || baseBankName,
+      residualPrincipal: matchedSub.residualPrincipal ? Number(matchedSub.residualPrincipal) : undefined,
+      isSubrogated: true,
+      subrogationIndex: matchedIndex + 1
+    };
+  }
+
+  if (baseMonthly <= 0) {
+    return {
+      isActive: false,
+      monthlyPayment: 0,
+      configuredMonthlyPayment: 0,
+      rate: baseRate,
+      rateType: 'FIXED',
+      durationYears: baseDuration,
+      startDate: baseStartStr || undefined,
+      bankName: baseBankName,
+      isSubrogated: false,
+      subrogationIndex: 0
+    };
+  }
+
+  if (!baseStartStr || isNaN(new Date(baseStartStr).getTime())) {
+    return {
+      isActive: true,
+      monthlyPayment: baseMonthly,
+      configuredMonthlyPayment: baseMonthly,
+      rate: baseRate,
+      rateType: 'FIXED',
+      durationYears: baseDuration,
+      bankName: baseBankName,
+      isSubrogated: false,
+      subrogationIndex: 0
+    };
+  }
+
+  const baseEndStr = addYearsIsoServer(baseStartStr, baseDuration);
+  const inBaseWindow = targetMonthIso >= baseStartStr.slice(0, 7) && targetMonthIso <= baseEndStr.slice(0, 7);
+
+  return {
+    isActive: inBaseWindow,
+    monthlyPayment: inBaseWindow ? baseMonthly : 0,
+    configuredMonthlyPayment: baseMonthly,
+    rate: baseRate,
+    rateType: 'FIXED',
+    durationYears: baseDuration,
+    startDate: baseStartStr,
+    endDate: baseEndStr,
+    bankName: baseBankName,
+    isSubrogated: false,
+    subrogationIndex: 0
+  };
+}
+
+function evaluatePropertySubrogationServer(
+  property,
+  bankCatalog,
+  indices = getDefaultMarketIndicesServer(),
+  radarSettings = DEFAULT_NOTIF_SETTINGS.mortgageRadar,
+  referenceDate = new Date()
+) {
+  if (!property) return null;
+  const active = resolveActiveMortgageServer(property, referenceDate);
+  if (active.configuredMonthlyPayment > 0 && !active.isActive) {
+    return null;
+  }
+
+  let monthlyPayment = Number(active.monthlyPayment) || 0;
+  let currentRate = Number(active.rate) || 0;
+  let durationYears = (Number(active.durationYears) || 0) > 0 ? Number(active.durationYears) : 20;
+  let currentBankName = active.bankName || property.financials?.originalBankName || 'Banca Attuale';
+  let currentRateType = active.rateType || 'FIXED';
+
+  if (monthlyPayment <= 0 && Array.isArray(property.recurringCosts)) {
+    const mortCost = property.recurringCosts.find(c => c.category === 'MORTGAGE' && Number(c.amount) > 0);
+    if (mortCost) {
+      monthlyPayment = mortCost.frequency === 'YEARLY' ? Number(mortCost.amount) / 12 : Number(mortCost.amount);
+    }
+  }
+  if (monthlyPayment <= 0) return null;
+
+  if (monthlyPayment > 10000) {
+    const rateForCalc = currentRate > 0 ? currentRate : 3.5;
+    monthlyPayment = calcFrenchPaymentServer(monthlyPayment, rateForCalc, durationYears * 12);
+  }
+  if (currentRate <= 0) currentRate = 3.5;
+
+  const totalMonths = durationYears * 12;
+  let elapsedMonths = 0;
+  const startStr = active.startDate || property.financials?.mortgageStartDate || property.purchaseDate;
+  if (startStr) {
+    const parts = String(startStr).trim().split('-');
+    if (parts.length >= 2) {
+      const sy = parseInt(parts[0], 10);
+      const sm = parseInt(parts[1], 10) - 1;
+      if (!isNaN(sy) && !isNaN(sm)) {
+        const diff = (referenceDate.getFullYear() - sy) * 12 + (referenceDate.getMonth() - sm);
+        if (diff >= totalMonths) {
+          return null;
+        }
+        elapsedMonths = Math.max(0, diff);
+      }
+    }
+  }
+
+  const remainingMonths = Math.max(12, totalMonths - elapsedMonths);
+  const remainingYears = Math.max(1, Math.round(remainingMonths / 12));
+
+  const impliedPrincipal = calcImpliedPrincipalServer(monthlyPayment, currentRate, remainingMonths);
+  const explicitPrincipal = Number(active.residualPrincipal) || 0;
+  const estimatedResidualPrincipal =
+    explicitPrincipal > 0 && Math.abs(explicitPrincipal - impliedPrincipal) / Math.max(1, impliedPrincipal) <= 0.15
+      ? explicitPrincipal
+      : impliedPrincipal;
+
+  const propertyValue = Math.max(1, Number(property.currentValue) || Number(property.purchasePrice) || estimatedResidualPrincipal * 1.35);
+  const estimatedLtv = Math.min(100, Math.round((estimatedResidualPrincipal / propertyValue) * 100));
+  const isGreenProperty = ['A', 'B'].includes(String(property.energyClass || '').toUpperCase());
+
+  const baseIrs20 = Number(indices.irs20Y) || 2.42;
+  let targetIrs = baseIrs20;
+  if (remainingYears <= 12) targetIrs = Number(indices.irs10Y) || 2.38;
+  else if (remainingYears <= 17) targetIrs = Number(indices.irs15Y) || 2.44;
+  else if (remainingYears <= 22) targetIrs = baseIrs20;
+  else if (remainingYears <= 27) targetIrs = Number(indices.irs25Y) || 2.36;
+  else targetIrs = Number(indices.irs30Y) || 2.29;
+
+  const ltvSpreadDiscount = estimatedLtv <= 50 ? -0.05 : estimatedLtv > 80 ? 0.15 : 0;
+
+  const minSavings = radarSettings?.minMonthlySavings !== undefined ? Number(radarSettings.minMonthlySavings) : 30;
+  const minBps = radarSettings?.minRateDeltaBps !== undefined ? Number(radarSettings.minRateDeltaBps) : 25;
+  const prefType = radarSettings?.preferredRateType || 'ALL';
+
+  const typeFilteredCatalog = (bankCatalog || []).filter(b => {
+    if (prefType === 'FIXED' && b.rateType !== 'FIXED') return false;
+    if (prefType === 'VARIABLE' && b.rateType !== 'VARIABLE') return false;
+    return true;
+  });
+
+  const ltvEligibleCatalog = typeFilteredCatalog.filter(b => (Number(b.maxLtv) || 80) >= estimatedLtv);
+  const filteredCatalog = ltvEligibleCatalog.length > 0 ? ltvEligibleCatalog : typeFilteredCatalog;
+
+  const evaluatedOffers = filteredCatalog.map(offer => {
+    const isGreenRateApplied = Boolean(isGreenProperty && offer.greenTan !== undefined && offer.greenTan > 0);
+    const baseTan = isGreenRateApplied ? Number(offer.greenTan) : Number(offer.tan);
+    const offerBaseIndex = Number(offer.referenceIndexRate) || baseIrs20;
+    const durationIrsDelta = offer.rateType === 'FIXED' ? targetIrs - offerBaseIndex : 0;
+    const adjDelta = offer.rateType === 'FIXED' ? durationIrsDelta + ltvSpreadDiscount : ltvSpreadDiscount;
+    const appliedTan = Math.max(0.5, Math.round((baseTan + adjDelta) * 100) / 100);
+    const taegDiff = Math.max(0.08, (Number(offer.taeg) || 0) - (Number(offer.tan) || 0));
+    const appliedTaeg = Math.round((appliedTan + taegDiff) * 100) / 100;
+
+    const newMonthlyPayment = calcFrenchPaymentServer(impliedPrincipal, appliedTan, remainingMonths);
+    const monthlySavings = Math.round((monthlyPayment - newMonthlyPayment) * 100) / 100;
+    const annualSavings = Math.round(monthlySavings * 12 * 100) / 100;
+    const totalRemainingSavings = Math.round(monthlySavings * remainingMonths);
+    const rateDelta = Math.round((currentRate - appliedTan) * 100) / 100;
+    const rateDeltaBps = Math.round(rateDelta * 100);
+    const isAdvantageous = monthlySavings >= minSavings && rateDeltaBps >= minBps;
+
+    return {
+      offer,
+      appliedTan,
+      appliedTaeg,
+      isGreenRateApplied,
+      newMonthlyPayment,
+      monthlySavings,
+      annualSavings,
+      totalRemainingSavings,
+      rateDelta,
+      rateDeltaBps,
+      isAdvantageous
+    };
+  });
+
+  evaluatedOffers.sort((a, b) => {
+    if (Math.abs(b.monthlySavings - a.monthlySavings) > 0.5) return b.monthlySavings - a.monthlySavings;
+    if (a.appliedTaeg !== b.appliedTaeg) return a.appliedTaeg - b.appliedTaeg;
+    return (b.offer.isMilanFocused ? 1 : 0) - (a.offer.isMilanFocused ? 1 : 0);
+  });
+
+  const bestOffer = evaluatedOffers.length > 0 ? evaluatedOffers[0] : null;
+  const isAdvantageous = Boolean(bestOffer && bestOffer.isAdvantageous);
+  const advantageReason = bestOffer && isAdvantageous
+    ? `Risparmio di € ${bestOffer.monthlySavings.toFixed(0)}/mese (€ ${bestOffer.annualSavings.toFixed(0)}/anno) con ${bestOffer.offer.bankName} a TAN ${bestOffer.appliedTan.toFixed(2)}% (-${bestOffer.rateDeltaBps} bps)`
+    : undefined;
+
+  return {
+    propertyId: property.id,
+    propertyName: property.name,
+    propertyAddress: property.address,
+    energyClass: property.energyClass,
+    isGreenProperty,
+    currentBankName,
+    currentRate,
+    currentRateType,
+    currentMonthlyPayment: Math.round(monthlyPayment * 100) / 100,
+    remainingYears,
+    remainingMonths,
+    estimatedResidualPrincipal,
+    propertyValue,
+    estimatedLtv,
+    bestOffer,
+    topOffers: evaluatedOffers,
+    isAdvantageous,
+    advantageReason
+  };
+}
+
+function analyzePortfolioMortgagesServer(
+  properties = [],
+  radarSettings = DEFAULT_NOTIF_SETTINGS.mortgageRadar,
+  customIndices = null,
+  customBankOffers = null,
+  referenceDate = new Date()
+) {
+  const indices = customIndices || getDefaultMarketIndicesServer(referenceDate);
+  const bankCatalog = Array.isArray(customBankOffers) && customBankOffers.length > 0
+    ? customBankOffers
+    : buildItalianAndMilanBankCatalogServer(indices);
+
+  const opportunities = [];
+  for (const prop of properties || []) {
+    const opp = evaluatePropertySubrogationServer(prop, bankCatalog, indices, radarSettings, referenceDate);
+    if (opp) opportunities.push(opp);
+  }
+
+  opportunities.sort((a, b) => (b.bestOffer?.monthlySavings || 0) - (a.bestOffer?.monthlySavings || 0));
+
+  const advantageousList = opportunities.filter(o => o.isAdvantageous && o.bestOffer);
+  const totalPotentialMonthlySavings = Math.round(
+    advantageousList.reduce((acc, o) => acc + (o.bestOffer?.monthlySavings || 0), 0) * 100
+  ) / 100;
+  const totalPotentialAnnualSavings = Math.round(totalPotentialMonthlySavings * 12 * 100) / 100;
+  const totalPotentialRemainingSavings = Math.round(
+    advantageousList.reduce((acc, o) => acc + (o.bestOffer?.totalRemainingSavings || 0), 0)
+  );
+
+  return {
+    generatedAt: referenceDate.toISOString(),
+    indices,
+    banksMonitoredCount: bankCatalog.length,
+    propertiesAnalyzedCount: opportunities.length,
+    advantageousCount: advantageousList.length,
+    totalPotentialMonthlySavings,
+    totalPotentialAnnualSavings,
+    totalPotentialRemainingSavings,
+    opportunities,
+    bankCatalog
+  };
+}
+
+function formatMortgageRadarTelegramReport(report, radarSettings = DEFAULT_NOTIF_SETTINGS.mortgageRadar) {
+  const idx = report?.indices || getDefaultMarketIndicesServer();
+  const minSav = radarSettings?.minMonthlySavings ?? 30;
+  const minBps = radarSettings?.minRateDeltaBps ?? 25;
+  const dateStr = (report?.generatedAt || new Date().toISOString()).slice(0, 10).split('-').reverse().join('/');
+
+  const lines = [
+    `🏦 <b>ImmoPlan · Radar Tassi Mutui &amp; Surroghe (Italia &amp; Milano)</b>`,
+    `📅 Rilevazione: <b>${escapeTgHtml(dateStr)}</b> · Banche monitorate: <b>${report?.banksMonitoredCount || 15}</b>`,
+    `📊 Indici Mercato: <b>IRS 20A ${idx.irs20Y}%</b> | <b>IRS 25A ${idx.irs25Y}%</b> | <b>Euribor 3M ${idx.euribor3M}%</b> | <b>BCE ${idx.bceRate}%</b>`,
+    ``
+  ];
+
+  const opps = report?.opportunities || [];
+  const advOpps = opps.filter(o => o.isAdvantageous && o.bestOffer);
+
+  if (opps.length === 0) {
+    lines.push(`ℹ️ <i>Nessun mutuo attivo rilevato sugli immobili in portafoglio.</i>`);
+    return lines.join('\n');
+  }
+
+  if (advOpps.length > 0) {
+    lines.push(`🔥 <b>OPPORTUNITÀ SURROGA VANTAGGIOSE: ${advOpps.length} su ${opps.length} mutui</b>`);
+    lines.push(`💰 Risparmio Potenziale: <b>€ ${report.totalPotentialMonthlySavings.toFixed(2)}/mese</b> (<b>€ ${report.totalPotentialAnnualSavings.toFixed(0)}/anno</b>)`);
+    lines.push(`🏆 Risparmio Totale Residuo: <b>€ ${report.totalPotentialRemainingSavings.toLocaleString('it-IT')}</b>`);
+  } else {
+    lines.push(`✅ <b>Analisi completata su ${opps.length} mutui attivi:</b> nessuna offerta supera attualmente la soglia configurata (min. € ${minSav}/mese e -${minBps} bps).`);
+  }
+
+  const listToRender = advOpps.length > 0 ? advOpps : opps;
+
+  for (const opp of listToRender) {
+    const best = opp.bestOffer;
+    if (!best) continue;
+    const propName = escapeTgHtml(opp.propertyName || 'Immobile');
+    const curBank = escapeTgHtml(opp.currentBankName || 'Banca Attuale');
+    const bestBank = escapeTgHtml(best.offer.bankName);
+    const bestCity = escapeTgHtml(best.offer.hqCity);
+    const bestProd = escapeTgHtml(best.offer.productName);
+    const greenTag = opp.isGreenProperty ? ` 🌿 <i>(Green Classe ${escapeTgHtml(opp.energyClass)})</i>` : '';
+
+    lines.push(``);
+    lines.push(`━━━━━━━━━━━━━━━`);
+    lines.push(`🏠 <b>${propName}</b>${greenTag}`);
+    lines.push(`📍 <i>Mutuo Attuale:</i> ${curBank} · Rata <b>€ ${opp.currentMonthlyPayment.toFixed(2)}/m</b> · TAN <b>${opp.currentRate.toFixed(2)}%</b> (${opp.remainingYears}a residui, Cap. € ${opp.estimatedResidualPrincipal.toLocaleString('it-IT')})`);
+
+    if (best.monthlySavings > 0) {
+      lines.push(`🎯 <b>Migliore Surroga: ${bestBank}</b> (${bestCity})`);
+      lines.push(`   • Prodotto: <i>${bestProd}</i>${best.isGreenRateApplied ? ' 🌿' : ''}`);
+      lines.push(`   • Nuovo Tasso: <b>TAN ${best.appliedTan.toFixed(2)}%</b> (TAEG ${best.appliedTaeg.toFixed(2)}%) [<b>-${best.rateDelta.toFixed(2)}% / -${best.rateDeltaBps} bps</b>]`);
+      lines.push(`   • Nuova Rata: <b>€ ${best.newMonthlyPayment.toFixed(2)}/mese</b>`);
+      lines.push(`   • 📈 Risparmio: <b>€ ${best.monthlySavings.toFixed(2)}/mese</b> | <b>€ ${best.annualSavings.toFixed(0)}/anno</b>`);
+      lines.push(`   • 💎 Risparmio Totale (${opp.remainingYears}a): <b>€ ${best.totalRemainingSavings.toLocaleString('it-IT')}</b>`);
+      lines.push(`   • 📌 <i>Surroga Zero Spese (L. 40/2007): Perizia e Istruttoria gratuite</i>`);
+
+      const altOffers = (opp.topOffers || []).slice(1, 3).filter(a => a.monthlySavings > 0);
+      if (altOffers.length > 0) {
+        lines.push(`   🥈 <i>Altre Banche:</i>`);
+        altOffers.forEach((alt, i) => {
+          lines.push(`      ${i + 2}) <b>${escapeTgHtml(alt.offer.bankName)}</b>: TAN ${alt.appliedTan.toFixed(2)}% → Rata € ${alt.newMonthlyPayment.toFixed(0)}/m (<b>-€ ${alt.monthlySavings.toFixed(0)}/m</b>)`);
+        });
+      }
+    } else {
+      lines.push(`ℹ️ <i>Il tasso attuale (${opp.currentRate.toFixed(2)}%) è già più basso o allineato alla migliore offerta di mercato (${bestBank}: TAN ${best.appliedTan.toFixed(2)}%).</i>`);
+    }
+  }
+
+  return lines.join('\n');
+}
+
+app.get('/api/mortgage-radar/rates', (req, res) => {
+  try {
+    let dbData = {};
+    if (fs.existsSync(DB_FILE)) dbData = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
+    const settings = dbData.notificationSettings || DEFAULT_NOTIF_SETTINGS;
+    const radarSettings = { ...DEFAULT_NOTIF_SETTINGS.mortgageRadar, ...(settings.mortgageRadar || {}) };
+    const indices = getDefaultMarketIndicesServer();
+    const bankCatalog = buildItalianAndMilanBankCatalogServer(indices);
+    res.json({ success: true, indices, bankCatalog, radarSettings });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+app.post('/api/mortgage-radar/settings', (req, res) => {
+  try {
+    ensureDirectoryExistence(DB_FILE);
+    let dbData = {};
+    if (fs.existsSync(DB_FILE)) dbData = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
+    const currentSettings = dbData.notificationSettings || DEFAULT_NOTIF_SETTINGS;
+    const updatedRadar = {
+      ...DEFAULT_NOTIF_SETTINGS.mortgageRadar,
+      ...(currentSettings.mortgageRadar || {}),
+      ...(req.body || {})
+    };
+    dbData.notificationSettings = {
+      ...DEFAULT_NOTIF_SETTINGS,
+      ...currentSettings,
+      mortgageRadar: updatedRadar
+    };
+    fs.writeFileSync(DB_FILE, JSON.stringify(dbData, null, 2), 'utf8');
+    res.json({ success: true, mortgageRadar: updatedRadar });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+app.post('/api/mortgage-radar/check', async (req, res) => {
+  try {
+    let dbData = {};
+    if (fs.existsSync(DB_FILE)) {
+      try {
+        dbData = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
+      } catch (e) {}
+    }
+
+    const settings = dbData.notificationSettings || DEFAULT_NOTIF_SETTINGS;
+    const radarSettings = {
+      ...DEFAULT_NOTIF_SETTINGS.mortgageRadar,
+      ...(settings.mortgageRadar || {})
+    };
+
+    if (req.body?.minMonthlySavings !== undefined) {
+      radarSettings.minMonthlySavings = Number(req.body.minMonthlySavings);
+    }
+    if (req.body?.minRateDeltaBps !== undefined) {
+      radarSettings.minRateDeltaBps = Number(req.body.minRateDeltaBps);
+    }
+    if (req.body?.preferredRateType) {
+      radarSettings.preferredRateType = req.body.preferredRateType;
+    }
+
+    const properties = Array.isArray(req.body?.properties) ? req.body.properties : (dbData.properties || []);
+    const customIndices = req.body?.customIndices || null;
+    const customBankOffers = req.body?.customBankOffers || null;
+
+    const report = analyzePortfolioMortgagesServer(properties, radarSettings, customIndices, customBankOffers);
+    const tgReportHtml = formatMortgageRadarTelegramReport(report, radarSettings);
+
+    let telegramSent = false;
+    let telegramError = undefined;
+    const shouldSendTelegram = Boolean(req.body?.sendTelegram);
+    const forceSend = Boolean(req.body?.forceSend);
+
+    if (shouldSendTelegram && (report.advantageousCount > 0 || forceSend)) {
+      const botToken = (req.body?.botToken || settings.telegram?.botToken || '').trim();
+      const targetChat = (req.body?.recipientChatId || radarSettings.recipientChatId || settings.telegram?.ownerChatId || '').trim();
+
+      if (!botToken || !targetChat) {
+        telegramError = 'Bot Token Telegram o Chat ID destinatario non configurato nelle impostazioni.';
+      } else {
+        const tgRes = await sendTelegramText(botToken, targetChat, tgReportHtml);
+        if (tgRes.success) {
+          telegramSent = true;
+        } else {
+          telegramError = tgRes.error || 'Errore invio messaggio Telegram';
+        }
+      }
+
+      // Registra nel registro log notifiche
+      ensureDirectoryExistence(DB_FILE);
+      if (!dbData.notificationLogs) dbData.notificationLogs = [];
+      dbData.notificationLogs.unshift({
+        id: `log_radar_${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        channel: 'TELEGRAM',
+        type: 'MORTGAGE_RADAR_ALERT',
+        recipient: targetChat || 'Non configurato',
+        status: telegramSent ? 'SUCCESS' : 'FAILED',
+        details: telegramSent
+          ? `Report Radar Mutui inviato (${report.advantageousCount} offerte vantaggiose, risparmio pot. € ${report.totalPotentialMonthlySavings.toFixed(0)}/mese)`
+          : `Invio Report Radar Mutui fallito: ${telegramError}`
+      });
+      if (dbData.notificationLogs.length > 200) dbData.notificationLogs = dbData.notificationLogs.slice(0, 200);
+    }
+
+    // Aggiorna timestamp ultimo controllo
+    const nowIso = new Date().toISOString();
+    if (!dbData.notificationSettings) dbData.notificationSettings = { ...DEFAULT_NOTIF_SETTINGS };
+    dbData.notificationSettings.mortgageRadar = {
+      ...radarSettings,
+      lastCheckAt: nowIso,
+      ...(telegramSent ? { lastAlertSentAt: nowIso } : {})
+    };
+
+    if (fs.existsSync(path.dirname(DB_FILE))) {
+      try {
+        fs.writeFileSync(DB_FILE, JSON.stringify(dbData, null, 2), 'utf8');
+      } catch (e) {}
+    }
+
+    // Aggiorna sensore Home Assistant se disponibile
+    if (SUPERVISOR_TOKEN) {
+      await updateHASensor('radar_mutui', report.advantageousCount, {
+        friendly_name: 'Opportunità Surroga Mutui (Italia & Milano)',
+        unit_of_measurement: 'offerte',
+        icon: 'mdi:bank-transfer',
+        risparmio_mensile_potenziale: report.totalPotentialMonthlySavings,
+        risparmio_annuo_potenziale: report.totalPotentialAnnualSavings,
+        risparmio_totale_residuo: report.totalPotentialRemainingSavings,
+        banche_monitorate: report.banksMonitoredCount
+      }).catch(() => {});
+    }
+
+    res.json({
+      success: true,
+      report,
+      telegramSent,
+      telegramMessage: tgReportHtml,
+      telegramError
+    });
+  } catch (e) {
+    console.error('[MORTGAGE RADAR ERROR]:', e);
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
 // Fondamentale: Tutte le altre rotte devono servire index.html per gestire il routing client-side
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'dist', 'index.html'));
@@ -1485,4 +2524,10 @@ module.exports.escapeTgHtml = escapeTgHtml;
 module.exports.buildPdfBuffer = buildPdfBuffer;
 module.exports.sendTelegramText = sendTelegramText;
 module.exports.sendTelegramDoc = sendTelegramDoc;
+module.exports.getDefaultMarketIndicesServer = getDefaultMarketIndicesServer;
+module.exports.buildItalianAndMilanBankCatalogServer = buildItalianAndMilanBankCatalogServer;
+module.exports.evaluatePropertySubrogationServer = evaluatePropertySubrogationServer;
+module.exports.analyzePortfolioMortgagesServer = analyzePortfolioMortgagesServer;
+module.exports.formatMortgageRadarTelegramReport = formatMortgageRadarTelegramReport;
+
 

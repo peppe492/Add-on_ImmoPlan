@@ -18,6 +18,14 @@ export const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettings = {
     notifyOwnerOnDue: true,
     notifyTenantOnDue: true,
     autoSendReceiptToTenant: true
+  },
+  mortgageRadar: {
+    enabled: true,
+    autoTelegramAlert: true,
+    minMonthlySavings: 30,
+    minRateDeltaBps: 25,
+    preferredRateType: 'ALL',
+    checkIntervalHours: 24
   }
 };
 
@@ -27,12 +35,29 @@ export class NotificationService {
       const res = await fetch('/api/notifications/settings');
       if (res.ok) {
         const data = await res.json();
-        if (data && data.settings) return data.settings;
+        if (data && data.settings) {
+          return {
+            ...DEFAULT_NOTIFICATION_SETTINGS,
+            ...data.settings,
+            mortgageRadar: {
+              ...DEFAULT_NOTIFICATION_SETTINGS.mortgageRadar!,
+              ...(data.settings.mortgageRadar || {})
+            }
+          };
+        }
       }
     } catch {
       // Fallback to IndexedDB
     }
-    return db.getNotificationSettings();
+    const local = await db.getNotificationSettings();
+    return {
+      ...DEFAULT_NOTIFICATION_SETTINGS,
+      ...local,
+      mortgageRadar: {
+        ...DEFAULT_NOTIFICATION_SETTINGS.mortgageRadar!,
+        ...(local?.mortgageRadar || {})
+      }
+    };
   }
 
   async saveSettings(settings: NotificationSettings): Promise<void> {

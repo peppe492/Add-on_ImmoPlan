@@ -6,6 +6,7 @@ import { calculateRentStatus } from '../services/rentStatusService';
 import { createRentReceipt } from '../services/receiptPdfService';
 import { notificationService } from '../services/notificationService';
 import { RentReceiptModal } from './RentReceiptModal';
+import { getActiveMortgageAtDate } from '../services/mortgageService';
 
 const MONTHS = [
   'Gennaio', 'Febbraio', 'Marzo', 'Aprile', 'Maggio', 'Giugno',
@@ -214,12 +215,16 @@ export const RentalManager: React.FC = () => {
               return total;
           };
 
-          // Mortgage
+          // Mortgage (Time-Aware with Subrogation Support)
           const mortgageCost = prop.recurringCosts?.find(c => c.category === 'MORTGAGE');
           if (mortgageCost) {
               mortgageVal = mortgageCost.frequency === 'MONTHLY' ? Number(mortgageCost.amount) || 0 : (Number(mortgageCost.amount) || 0) / 12;
-          } else if (prop.financials?.mortgageAmount && prop.financials.mortgageDuration) {
-              mortgageVal = prop.financials.mortgageAmount / (prop.financials.mortgageDuration * 12);
+          } else {
+              const targetDate = new Date(formData.year || new Date().getFullYear(), formData.month ?? new Date().getMonth(), 1);
+              const activeMort = getActiveMortgageAtDate(prop, targetDate, { monthGranularity: true });
+              if (activeMort.isActive && activeMort.monthlyPayment > 0) {
+                  mortgageVal = activeMort.monthlyPayment;
+              }
           }
 
           // Condo (Maintenance)

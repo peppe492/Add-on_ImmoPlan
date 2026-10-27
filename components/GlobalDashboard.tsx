@@ -3,8 +3,9 @@ import { createPortal } from 'react-dom';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { db } from '../services/dbService';
-import { Property, RentalRecord, ValuationRecord, InvoiceRecord } from '../types';
+import { Property, RentalRecord, ValuationRecord, InvoiceRecord, MortgageSubrogation } from '../types';
 import { getAnnualDeductionsByProperty, getAnnualDeductionsTotal } from '../services/taxDeductionService';
+import { getActiveMortgageAtDate, getPropertySubrogations } from '../services/mortgageService';
 
 /* =====================================================================================
    ImmoPlan · Dashboard — "Bento Terminal" (port del prototipo dashboard-bento-filtro)
@@ -52,16 +53,15 @@ const NOW: Anchor = { y: today.getFullYear(), m: today.getMonth(), d: today.getD
 const GROWTH: Record<TF, number> = { GIORNO: 0.004, MESE: 0.012, '6M': 0.045, ANNO: 0.075 };
 const FACTOR: Record<TF, number> = { GIORNO: 1 / 30, MESE: 1 / 4.33, '6M': 1, ANNO: 1 };
 
-interface Derived { id: string; name: string; code: string; address: string; cur: number; buy: number; inc: number; exp: number; status: string; type: string; coords?: { lat: number; lng: number }; costs: any[]; mortgage: number; condoFees: number; defaultTaxRate: number; mortgageStartDate?: string; mortgageDuration?: number; initialInvestment?: number; valuations?: ValuationRecord[]; }
-const monthlyExp = (p: Property) => {
+interface Derived { id: string; name: string; code: string; address: string; cur: number; buy: number; inc: number; exp: number; status: string; type: string; coords?: { lat: number; lng: number }; costs: any[]; mortgage: number; condoFees: number; defaultTaxRate: number; mortgageStartDate?: string; mortgageDuration?: number; subrogations?: MortgageSubrogation[]; initialInvestment?: number; valuations?: ValuationRecord[]; }
+const monthlyExp = (p: Property, refDate: Date = new Date()) => {
   let m = 0; const costs = p.recurringCosts || [];
   costs.forEach(c => {
     if (c.frequency === 'MONTHLY') {
       let active = true;
       if (c.referenceYear != null && c.referenceMonth != null) {
         const costStart = new Date(c.referenceYear, c.referenceMonth, 1);
-        const now = new Date();
-        if (now < costStart) {
+        if (refDate < costStart) {
           active = false;
         }
       }
@@ -74,26 +74,13 @@ const monthlyExp = (p: Property) => {
   if (!costs.some(c => c.category === 'TAX') && p.financials?.defaultTaxRate && p.financials?.monthlyRent) {
     m += safeNum(p.financials.monthlyRent) * safeNum(p.financials.defaultTaxRate) / 100;
   }
-  if (!costs.some(c => c.category === 'MORTGAGE') && p.financials?.mortgageAmount) {
-    const mortgageAmt = safeNum(p.financials.mortgageAmount);
-    const startStr = p.financials.mortgageStartDate;
-    const duration = p.financials.mortgageDuration || 20;
-    let active = true;
-    if (startStr) {
-      const mStart = new Date(startStr);
-      if (!isNaN(mStart.getTime())) {
-        const mEnd = new Date(mStart.getFullYear() + duration, mStart.getMonth(), mStart.getDate());
-        const now = new Date();
-        if (now < mStart || now > mEnd) {
-          active = false;
-        }
-      }
-    }
-    if (active) m += mortgageAmt;
+  if (!costs.some(c => c.category === 'MORTGAGE')) {
+    const activeMort = getActiveMortgageAtDate(p, refDate, { monthGranularity: true });
+    if (activeMort.isActive) m += safeNum(activeMort.monthlyPayment);
   }
   return m;
 };
-const derive = (p: Property): Derived => ({
+const derive = (p: Property, refDate: Date = new Date()): Derived => ({
   id: p.id,
   name: p.name,
   code: initials(p.name),
@@ -101,7 +88,7 @@ const derive = (p: Property): Derived => ({
   cur: safeNum(p.currentValue),
   buy: safeNum(p.purchasePrice),
   inc: safeNum(p.financials?.monthlyRent),
-  exp: monthlyExp(p),
+  exp: monthlyExp(p, refDate),
   status: p.status,
   type: p.type,
   coords: p.coordinates,
@@ -111,6 +98,7 @@ const derive = (p: Property): Derived => ({
   defaultTaxRate: safeNum(p.financials?.defaultTaxRate),
   mortgageStartDate: p.financials?.mortgageStartDate,
   mortgageDuration: p.financials?.mortgageDuration,
+  subrogations: getPropertySubrogations(p),
   initialInvestment: p.financials?.initialInvestment,
   valuations: p.valuations || []
 });
@@ -238,62 +226,68 @@ const getActiveMonthlyAmount = (tf: TF, anchor: Anchor, start: Date, end: Date, 
   return amt * activeMonths;
 };
 
-const getActiveMortgageAmount = (tf: TF, anchor: Anchor, start: Date, end: Date, amt: number, startDateStr?: string, durationYears?: number) => {
-  if (!startDateStr) {
-    if (tf === 'GIORNO') return amt * (7 / 30);
-    if (tf === 'MESE') return amt;
-    if (tf === '6M') return amt * 6;
-    return amt * 12;
-  }
-
-  const mStart = new Date(startDateStr);
-  if (isNaN(mStart.getTime())) {
-    if (tf === 'GIORNO') return amt * (7 / 30);
-    if (tf === 'MESE') return amt;
-    if (tf === '6M') return amt * 6;
-    return amt * 12;
-  }
-
-  const duration = durationYears && durationYears > 0 ? durationYears : 20;
-  const mEnd = new Date(mStart.getFullYear() + duration, mStart.getMonth(), mStart.getDate());
+const getActiveMortgageAmount = (
+  tf: TF,
+  anchor: Anchor,
+  start: Date,
+  end: Date,
+  amt: number,
+  startDateStr?: string,
+  durationYears?: number,
+  subrogations?: MortgageSubrogation[]
+) => {
+  const mockProp: Partial<Property> = {
+    financials: {
+      mortgageAmount: amt,
+      mortgageStartDate: startDateStr,
+      mortgageDuration: durationYears,
+      condoFees: 0,
+      defaultTaxRate: 0,
+      subrogations: subrogations || []
+    }
+  };
 
   if (tf === 'GIORNO') {
-    let activeDays = 0;
+    let total = 0;
     const weekStart = new Date(start);
     for (let d = 0; d < 7; d++) {
       const currentDay = new Date(weekStart.getFullYear(), weekStart.getMonth(), weekStart.getDate() + d);
-      if (currentDay >= mStart && currentDay <= mEnd) {
-        activeDays++;
+      const state = getActiveMortgageAtDate(mockProp, currentDay, { monthGranularity: false });
+      if (state.isActive) {
+        total += state.monthlyPayment / 30;
       }
     }
-    return amt * (activeDays / 30);
+    return total;
   }
 
   if (tf === 'MESE') {
     const currentMonth = new Date(anchor.y, anchor.m, 1);
-    return (currentMonth >= mStart && currentMonth <= mEnd) ? amt : 0;
+    const state = getActiveMortgageAtDate(mockProp, currentMonth, { monthGranularity: true });
+    return state.isActive ? state.monthlyPayment : 0;
   }
 
   if (tf === '6M') {
-    let activeMonths = 0;
+    let total = 0;
     for (let i = 5; i >= 0; i--) {
       const p = addMonths(anchor.y, anchor.m, -i);
       const currentMonth = new Date(p.y, p.m, 1);
-      if (currentMonth >= mStart && currentMonth <= mEnd) {
-        activeMonths++;
+      const state = getActiveMortgageAtDate(mockProp, currentMonth, { monthGranularity: true });
+      if (state.isActive) {
+        total += state.monthlyPayment;
       }
     }
-    return amt * activeMonths;
+    return total;
   }
 
-  let activeMonths = 0;
+  let total = 0;
   for (let m = 0; m < 12; m++) {
     const currentMonth = new Date(anchor.y, m, 1);
-    if (currentMonth >= mStart && currentMonth <= mEnd) {
-      activeMonths++;
+    const state = getActiveMortgageAtDate(mockProp, currentMonth, { monthGranularity: true });
+    if (state.isActive) {
+      total += state.monthlyPayment;
     }
   }
-  return amt * activeMonths;
+  return total;
 };
 
 const getPeriodIncome = (p: Derived, tf: TF, anchor: Anchor, start: Date, end: Date, records: RentalRecord[]) => {
@@ -417,8 +411,9 @@ function computeModel(
       }
     });
 
-    if (!(p.costs || []).some(c => c.category === 'MORTGAGE') && p.mortgage > 0) {
-      const activeAmt = getActiveMortgageAmount(tf, anchor, start, end, p.mortgage, p.mortgageStartDate, p.mortgageDuration);
+    const hasSubrogations = Boolean(p.subrogations && p.subrogations.length > 0);
+    if (!(p.costs || []).some(c => c.category === 'MORTGAGE') && (p.mortgage > 0 || hasSubrogations)) {
+      const activeAmt = getActiveMortgageAmount(tf, anchor, start, end, p.mortgage, p.mortgageStartDate, p.mortgageDuration, p.subrogations);
       catActual['MORTGAGE'] = (catActual['MORTGAGE'] || 0) + activeAmt;
     }
     if (!(p.costs || []).some(c => c.category === 'MAINTENANCE') && p.condoFees > 0) {
@@ -437,7 +432,7 @@ function computeModel(
     if (p.inc > 0 || records.some(r => r.propertyId === p.id)) trendCategories.push({ id: 'INCOME', name: 'Entrate', color: 'var(--accent)' });
     if (hasDeductions && includeTaxRefunds) trendCategories.push({ id: 'TAX_REFUND', name: 'Rimborsi 730', color: '#a855f7' });
     Object.keys(CAT_LABEL).forEach(cat => {
-      if ((p.costs || []).some(c => c.category === cat) || (cat === 'MORTGAGE' && p.mortgage > 0) || (cat === 'MAINTENANCE' && p.condoFees > 0) || (cat === 'TAX' && p.defaultTaxRate > 0 && p.inc > 0)) {
+      if ((p.costs || []).some(c => c.category === cat) || (cat === 'MORTGAGE' && (p.mortgage > 0 || (p.subrogations && p.subrogations.length > 0))) || (cat === 'MAINTENANCE' && p.condoFees > 0) || (cat === 'TAX' && p.defaultTaxRate > 0 && p.inc > 0)) {
         trendCategories.push({ id: cat, name: CAT_LABEL[cat] || cat, color: CAT_COLOR[cat] || '#8b97ab' });
       }
     });
@@ -484,15 +479,22 @@ function computeModel(
       }
       inc += stepInc;
 
-      let mortgageActive = true;
-      if (p.mortgageStartDate) {
-        const mStart = new Date(p.mortgageStartDate);
-        if (!isNaN(mStart.getTime())) {
-          const duration = p.mortgageDuration && p.mortgageDuration > 0 ? p.mortgageDuration : 20;
-          const mEnd = new Date(mStart.getFullYear() + duration, mStart.getMonth(), mStart.getDate());
-          if (stepDate < mStart || stepDate > mEnd) mortgageActive = false;
-        }
-      }
+      const stepMortgageState = getActiveMortgageAtDate(
+        {
+          financials: {
+            mortgageAmount: p.mortgage,
+            mortgageStartDate: p.mortgageStartDate,
+            mortgageDuration: p.mortgageDuration,
+            condoFees: p.condoFees,
+            defaultTaxRate: p.defaultTaxRate,
+            subrogations: p.subrogations || []
+          }
+        },
+        stepDate,
+        { monthGranularity: tf !== 'GIORNO' }
+      );
+      const mortgageActive = stepMortgageState.isActive;
+      const stepMortgageAmt = stepMortgageState.monthlyPayment;
 
       if (propId !== 'ALL') {
         catVals['INCOME'] = +(stepInc / 1000).toFixed(2);
@@ -517,7 +519,7 @@ function computeModel(
             }
           }
         });
-        if (cat === 'MORTGAGE' && !(p.costs || []).some(c => c.category === 'MORTGAGE') && p.mortgage > 0 && mortgageActive) activeAmt += p.mortgage;
+        if (cat === 'MORTGAGE' && !(p.costs || []).some(c => c.category === 'MORTGAGE') && stepMortgageAmt > 0 && mortgageActive) activeAmt += stepMortgageAmt;
         if (cat === 'MAINTENANCE' && !(p.costs || []).some(c => c.category === 'MAINTENANCE') && p.condoFees > 0) activeAmt += p.condoFees;
         if (cat === 'TAX' && !(p.costs || []).some(c => c.category === 'TAX') && p.defaultTaxRate > 0 && p.inc > 0) activeAmt += p.inc * p.defaultTaxRate / 100;
         catVals[cat] = (catVals[cat] || 0) + (activeAmt * factor) / 1000;
@@ -540,7 +542,7 @@ function computeModel(
           }
         }
       });
-      if (!(p.costs || []).some(c => c.category === 'MORTGAGE') && p.mortgage > 0 && mortgageActive) stepExp += p.mortgage;
+      if (!(p.costs || []).some(c => c.category === 'MORTGAGE') && stepMortgageAmt > 0 && mortgageActive) stepExp += stepMortgageAmt;
       if (!(p.costs || []).some(c => c.category === 'MAINTENANCE') && p.condoFees > 0) stepExp += p.condoFees;
       if (!(p.costs || []).some(c => c.category === 'TAX') && p.defaultTaxRate > 0 && p.inc > 0) stepExp += p.inc * p.defaultTaxRate / 100;
       exp += stepExp * factor;
@@ -977,7 +979,10 @@ export const GlobalDashboard: React.FC<GlobalDashboardProps> = ({ portalTarget }
     document.addEventListener('mousedown', h); return () => document.removeEventListener('mousedown', h);
   }, [picker]);
 
-  const derived = useMemo(() => properties.map(derive), [properties]);
+  const derived = useMemo(() => {
+    const refDate = new Date(anchor.y, tf === 'ANNO' ? 11 : anchor.m, anchor.d || 1);
+    return properties.map(p => derive(p, refDate));
+  }, [properties, anchor, tf]);
   const averageNetCapRate = useMemo(() => getPortfolioNetCapRate(derived), [derived]);
   const m = useMemo(
     () => computeModel(derived, tf, propId, anchor, records, invoices, includeTaxRefunds),

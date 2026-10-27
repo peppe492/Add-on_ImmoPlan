@@ -1,8 +1,35 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Property, RecurringCost, RentalRecord, Tenant, Attachment, ValuationRecord } from '../types';
+import {
+  Property,
+  RecurringCost,
+  RentalRecord,
+  Tenant,
+  Attachment,
+  ValuationRecord,
+  MortgageSubrogation,
+  MortgageRadarSettings,
+  BankMortgageOffer,
+  MarketReferenceIndices,
+  EvaluatedBankOffer
+} from '../types';
 import { db } from '../services/dbService';
+import { notificationService } from '../services/notificationService';
 import { PieChart, Pie, Cell, ResponsiveContainer, LineChart, Line, XAxis, Tooltip, YAxis, CartesianGrid, Legend } from 'recharts';
 import { MarketForecaster } from './MarketForecaster';
+import {
+  getActiveMortgageAtDate,
+  getPropertySubrogations,
+  calculateSubrogationTimeline,
+  calculatePropertyMortgageStats,
+  DEFAULT_MORTGAGE_RADAR_SETTINGS,
+  getDefaultMarketIndices,
+  buildItalianAndMilanBankCatalog,
+  evaluatePropertySubrogation,
+  analyzePortfolioMortgages,
+  runMortgageRadarCheck,
+  fetchLiveBankRatesWithAI
+} from '../services/mortgageService';
+
 
 /* =====================================================================================
    ImmoPlan · Patrimonio — "Bento Terminal" design
@@ -133,6 +160,42 @@ export const PropertyAssetManager: React.FC = () => {
   const [newValuationDate, setNewValuationDate] = useState<string>(new Date().toISOString().split('T')[0]);
   const [newValuationValue, setNewValuationValue] = useState<number>(0);
 
+  const [editingSubId, setEditingSubId] = useState<string | null>(null);
+  const [subForm, setSubForm] = useState<Partial<MortgageSubrogation>>({
+    date: new Date().toISOString().split('T')[0],
+    bankName: '',
+    newMonthlyPayment: 0,
+    newRate: undefined,
+    rateType: 'FIXED',
+    newDurationYears: 20,
+    residualPrincipal: undefined,
+    notes: '',
+    attachment: undefined
+  });
+
+  const [radarSettings, setRadarSettings] = useState<MortgageRadarSettings>(DEFAULT_MORTGAGE_RADAR_SETTINGS);
+  const [marketIndices, setMarketIndices] = useState<MarketReferenceIndices>(() => getDefaultMarketIndices());
+  const [bankCatalog, setBankCatalog] = useState<BankMortgageOffer[]>(() => buildItalianAndMilanBankCatalog());
+  const [radarBankFilter, setRadarBankFilter] = useState<'ALL' | 'MILAN_ONLY' | 'FIXED' | 'VARIABLE'>('ALL');
+  const [isScanningRates, setIsScanningRates] = useState(false);
+  const [isSendingRadarTg, setIsSendingRadarTg] = useState(false);
+  const [radarFeedback, setRadarFeedback] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
+
+  const resetSubForm = (p?: Property | null) => {
+    setEditingSubId(null);
+    setSubForm({
+      date: new Date().toISOString().split('T')[0],
+      bankName: '',
+      newMonthlyPayment: 0,
+      newRate: p?.financials?.mortgageRate || undefined,
+      rateType: 'FIXED',
+      newDurationYears: p?.financials?.mortgageDuration || 20,
+      residualPrincipal: undefined,
+      notes: '',
+      attachment: undefined
+    });
+  };
+
   /* ---- theme observer (immutato) ---- */
   useEffect(() => {
     const apply = () => setTheme(document.documentElement.classList.contains('theme-neon') ? 'NEON' : 'DEFAULT');
@@ -142,7 +205,136 @@ export const PropertyAssetManager: React.FC = () => {
     return () => observer.disconnect();
   }, []);
 
-  useEffect(() => { loadData(); }, []);
+  useEffect(() => {
+    loadData();
+    loadRadarConfig();
+  }, []);
+
+  const loadRadarConfig = async () => {
+    try {
+      const settings = await notificationService.getSettings();
+      if (settings?.mortgageRadar) {
+        setRadarSettings({ ...DEFAULT_MORTGAGE_RADAR_SETTINGS, ...settings.mortgageRadar });
+      }
+      const res = await fetch('/api/mortgage-radar/rates');
+      if (res.ok) {
+        const data = await res.json();
+        if (data?.indices) setMarketIndices(data.indices);
+        if (Array.isArray(data?.bankCatalog) && data.bankCatalog.length > 0) setBankCatalog(data.bankCatalog);
+        if (data?.radarSettings) setRadarSettings(prev => ({ ...prev, ...data.radarSettings }));
+      }
+    } catch {
+      // Fallback defaults already initialized
+    }
+  };
+
+  const handleRefreshBankRates = async (useAi: boolean = false) => {
+    setIsScanningRates(true);
+    setRadarFeedback(null);
+    try {
+      if (useAi) {
+        const live = await fetchLiveBankRatesWithAI();
+        setMarketIndices(live.indices);
+        setBankCatalog(live.bankCatalog);
+        setRadarFeedback({
+          type: 'success',
+          message: `Tassi banche Italia & Milano aggiornati (${live.indices.source === 'GEMINI_GROUNDED' ? 'Gemini AI Live Grounding' : 'Benchmark Mercato'}): IRS 20A ${live.indices.irs20Y}% · Euribor 3M ${live.indices.euribor3M}%`
+        });
+      } else {
+        const res = await fetch('/api/mortgage-radar/rates');
+        if (res.ok) {
+          const data = await res.json();
+          if (data?.indices) setMarketIndices(data.indices);
+          if (Array.isArray(data?.bankCatalog) && data.bankCatalog.length > 0) setBankCatalog(data.bankCatalog);
+        }
+        setRadarFeedback({
+          type: 'info',
+          message: `Analisi completata su ${bankCatalog.length} offerte di banche nazionali e di Milano.`
+        });
+      }
+    } catch (e: any) {
+      setRadarFeedback({ type: 'error', message: e?.message || 'Errore aggiornamento tassi' });
+    } finally {
+      setIsScanningRates(false);
+    }
+  };
+
+  const handleSaveRadarThresholds = async (nextSettings: MortgageRadarSettings) => {
+    setRadarSettings(nextSettings);
+    try {
+      const fullSettings = await notificationService.getSettings();
+      await notificationService.saveSettings({
+        ...fullSettings,
+        mortgageRadar: nextSettings
+      });
+      await fetch('/api/mortgage-radar/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(nextSettings)
+      }).catch(() => {});
+    } catch {}
+  };
+
+  const handleSendRadarTelegramReport = async (targetProperties?: Property[]) => {
+    setIsSendingRadarTg(true);
+    setRadarFeedback(null);
+    try {
+      const notifSettings = await notificationService.getSettings();
+      const propsToCheck = targetProperties && targetProperties.length > 0 ? targetProperties : properties;
+      const report = await runMortgageRadarCheck({
+        properties: propsToCheck,
+        settings: radarSettings,
+        sendTelegram: true,
+        forceSend: true,
+        botToken: notifSettings?.telegram?.botToken,
+        recipientChatId: radarSettings.recipientChatId || notifSettings?.telegram?.ownerChatId,
+        customIndices: marketIndices,
+        customBankCatalog: bankCatalog
+      });
+
+      if (report.telegramSent) {
+        setRadarFeedback({
+          type: 'success',
+          message: `✈️ Report Tassi & Surroghe inviato con successo su Telegram! (${report.advantageousCount} offerte vantaggiose rilevate)`
+        });
+      } else {
+        setRadarFeedback({
+          type: 'error',
+          message: `⚠️ Analisi eseguita, ma invio Telegram non riuscito: ${report.telegramError || 'Verifica Bot Token e Chat ID nel Pannello Admin.'}`
+        });
+      }
+    } catch (e: any) {
+      setRadarFeedback({
+        type: 'error',
+        message: `Errore invio report Telegram: ${e?.message || e}`
+      });
+    } finally {
+      setIsSendingRadarTg(false);
+    }
+  };
+
+  const handleApplyOfferToSubForm = (evOffer: EvaluatedBankOffer, remainingYears: number, residualPrincipal: number) => {
+    setEditingSubId(null);
+    setSubForm({
+      date: new Date().toISOString().split('T')[0],
+      bankName: evOffer.offer.bankName,
+      newMonthlyPayment: evOffer.newMonthlyPayment,
+      newRate: evOffer.appliedTan,
+      rateType: evOffer.offer.rateType,
+      newDurationYears: remainingYears,
+      residualPrincipal: residualPrincipal,
+      notes: `${evOffer.offer.productName} (${evOffer.offer.hqCity}) · Surroga Zero Spese L.40/2007 · TAEG ${evOffer.appliedTaeg}%`,
+      attachment: undefined
+    });
+    setRadarFeedback({
+      type: 'success',
+      message: `⚡ Modulo surroga precompilato con l'offerta di ${evOffer.offer.bankName} (Rata € ${evOffer.newMonthlyPayment}/mese, TAN ${evOffer.appliedTan}%). Clicca su "Registra Surroga Mutuo" per salvarla!`
+    });
+  };
+
+  const portfolioRadarReport = useMemo(() => {
+    return analyzePortfolioMortgages(properties, radarSettings, marketIndices, bankCatalog);
+  }, [properties, radarSettings, marketIndices, bankCatalog]);
 
   const loadData = async () => {
     const [loadedProps, loadedRecords, loadedTenants] = await Promise.all([db.getProperties(), db.getRentalRecords(), db.getTenants()]);
@@ -159,7 +351,8 @@ export const PropertyAssetManager: React.FC = () => {
       type: (newPropData.type as any) || 'RESIDENTIAL', status: (newPropData.status as any) || 'MAIN_RESIDENCE',
       purchasePrice: safeNum(newPropData.purchasePrice), currentValue: safeNum(newPropData.currentValue),
       purchaseDate: new Date().toISOString().split('T')[0], recurringCosts: [],
-      financials: { mortgageAmount: 0, mortgageDuration: 20, mortgageStartDate: new Date().toISOString().split('T')[0], mortgageRate: 0, monthlyRent: 0, condoFees: 0, defaultTaxRate: 21 },
+      financials: { mortgageAmount: 0, mortgageDuration: 20, mortgageStartDate: new Date().toISOString().split('T')[0], mortgageRate: 0, monthlyRent: 0, condoFees: 0, defaultTaxRate: 21, subrogations: [] },
+      subrogations: [],
       coordinates: newPropData.coordinates || { lat: 0, lng: 0 }, notes: newPropData.notes, documents: []
     };
     await db.saveProperty(p);
@@ -253,6 +446,95 @@ export const PropertyAssetManager: React.FC = () => {
     }
   };
 
+  const handleSaveSubrogation = async () => {
+    if (!selectedProp) return;
+    if (!subForm.date) return alert('Inserisci la data di decorrenza della surroga.');
+    if (!subForm.newMonthlyPayment || safeNum(subForm.newMonthlyPayment) <= 0) {
+      return alert('Inserisci la nuova rata mensile del mutuo (€).');
+    }
+
+    const existingSubs = getPropertySubrogations(selectedProp);
+    const entry: MortgageSubrogation = {
+      id: editingSubId || `SUB-${Date.now()}`,
+      date: subForm.date,
+      bankName: (subForm.bankName || '').trim() || undefined,
+      newMonthlyPayment: safeNum(subForm.newMonthlyPayment),
+      newRate: subForm.newRate !== undefined && subForm.newRate !== null && String(subForm.newRate) !== ''
+        ? safeNum(subForm.newRate)
+        : undefined,
+      rateType: subForm.rateType || 'FIXED',
+      newDurationYears: safeNum(subForm.newDurationYears) > 0 ? safeNum(subForm.newDurationYears) : 20,
+      residualPrincipal: subForm.residualPrincipal !== undefined && subForm.residualPrincipal !== null && safeNum(subForm.residualPrincipal) > 0
+        ? safeNum(subForm.residualPrincipal)
+        : undefined,
+      notes: (subForm.notes || '').trim() || undefined,
+      attachment: subForm.attachment
+    };
+
+    const updatedSubs = editingSubId
+      ? existingSubs.map(s => (s.id === editingSubId ? entry : s))
+      : [...existingSubs, entry];
+
+    updatedSubs.sort((a, b) => a.date.localeCompare(b.date));
+
+    const updatedProp: Property = {
+      ...selectedProp,
+      subrogations: updatedSubs,
+      financials: {
+        ...(selectedProp.financials || { mortgageAmount: 0, condoFees: 0, defaultTaxRate: 21 }),
+        subrogations: updatedSubs
+      }
+    };
+
+    setSelectedProp(updatedProp);
+    setProperties(prev => prev.map(p => (p.id === updatedProp.id ? updatedProp : p)));
+    await db.saveProperty(updatedProp);
+    await loadData();
+    resetSubForm(updatedProp);
+  };
+
+  const handleEditSubrogation = (sub: MortgageSubrogation) => {
+    setEditingSubId(sub.id);
+    setSubForm({
+      date: sub.date,
+      bankName: sub.bankName || '',
+      newMonthlyPayment: sub.newMonthlyPayment,
+      newRate: sub.newRate,
+      rateType: sub.rateType || 'FIXED',
+      newDurationYears: sub.newDurationYears || 20,
+      residualPrincipal: sub.residualPrincipal,
+      notes: sub.notes || '',
+      attachment: sub.attachment
+    });
+  };
+
+  const handleDeleteSubrogation = async (subId: string) => {
+    if (!selectedProp) return;
+    if (!window.confirm('Eliminare questa surroga/rinegoziazione dallo storico?')) return;
+    const updatedSubs = getPropertySubrogations(selectedProp).filter(s => s.id !== subId);
+    const updatedProp: Property = {
+      ...selectedProp,
+      subrogations: updatedSubs,
+      financials: {
+        ...(selectedProp.financials || { mortgageAmount: 0, condoFees: 0, defaultTaxRate: 21 }),
+        subrogations: updatedSubs
+      }
+    };
+    setSelectedProp(updatedProp);
+    setProperties(prev => prev.map(p => (p.id === updatedProp.id ? updatedProp : p)));
+    if (editingSubId === subId) resetSubForm(updatedProp);
+    await db.saveProperty(updatedProp);
+    await loadData();
+  };
+
+  const handleUploadSubrogationAttachment = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const att = await readFile(file);
+      setSubForm(prev => ({ ...prev, attachment: att }));
+    }
+  };
+
   const handleUpdateTaxRegime = async (
     regime: 'ESENTE_0' | 'CEDOLARE_10' | 'CEDOLARE_21' | 'IRPEF_ORDINARIA',
     customMarginalRate?: number,
@@ -286,15 +568,7 @@ export const PropertyAssetManager: React.FC = () => {
   };
 
   const calculateMortgageStats = (p: Property) => {
-    if (!p.financials?.mortgageAmount || !p.financials?.mortgageDuration || !p.financials?.mortgageStartDate) return null;
-    const installment = safeNum(p.financials.mortgageAmount);
-    const start = new Date(p.financials.mortgageStartDate); const now = new Date();
-    const totalMonths = p.financials.mortgageDuration * 12;
-    let elapsedMonths = (now.getFullYear() - start.getFullYear()) * 12 + (now.getMonth() - start.getMonth());
-    elapsedMonths = Math.max(0, Math.min(elapsedMonths, totalMonths));
-    const percent = (elapsedMonths / totalMonths) * 100;
-    const totalToPay = installment * totalMonths; const paid = installment * elapsedMonths; const remaining = totalToPay - paid;
-    return { percent, paid, remaining, totalToPay, elapsedMonths, totalMonths };
+    return calculatePropertyMortgageStats(p, new Date());
   };
 
   const totalValue = properties.reduce((acc, p) => acc + safeNum(p.currentValue), 0);
@@ -322,8 +596,12 @@ export const PropertyAssetManager: React.FC = () => {
       suggestedMortgageBase: 0,
       suggestedExpensesBase: 0,
       baseRentShare: 0,
-      expensesShare: 0
+      expensesShare: 0,
+      isSubrogated: false,
+      activeBankName: undefined as string | undefined
     };
+
+    const activeMortgage = getActiveMortgageAtDate(selectedProp, new Date(), { monthGranularity: true });
 
     let fixedExpenses = 0;
     const costs = selectedProp.recurringCosts || [];
@@ -331,8 +609,8 @@ export const PropertyAssetManager: React.FC = () => {
       if (c.frequency === 'MONTHLY') fixedExpenses += safeNum(c.amount);
       else if (c.frequency === 'YEARLY') fixedExpenses += safeNum(c.amount) / 12;
     });
-    if (!costs.some(c => c.category === 'MORTGAGE') && selectedProp.financials?.mortgageAmount) {
-      fixedExpenses += safeNum(selectedProp.financials.mortgageAmount);
+    if (!costs.some(c => c.category === 'MORTGAGE') && activeMortgage.isActive && activeMortgage.monthlyPayment > 0) {
+      fixedExpenses += safeNum(activeMortgage.monthlyPayment);
     }
 
     let oneOffExpenses = 0;
@@ -345,7 +623,7 @@ export const PropertyAssetManager: React.FC = () => {
     oneOffExpenses = totalOneOffInLastYear / 12;
     const totalExpenses = fixedExpenses + oneOffExpenses;
 
-    // Mutuo mensile isolato dalle altre spese
+    // Mutuo mensile isolato dalle altre spese (Time-Aware con supporto Surroga)
     let mortgageMonthly = 0;
     const mortgageCosts = costs.filter(c => c.category === 'MORTGAGE');
     if (mortgageCosts.length > 0) {
@@ -353,8 +631,8 @@ export const PropertyAssetManager: React.FC = () => {
         if (c.frequency === 'MONTHLY') mortgageMonthly += safeNum(c.amount);
         else if (c.frequency === 'YEARLY') mortgageMonthly += safeNum(c.amount) / 12;
       });
-    } else if (selectedProp.financials?.mortgageAmount) {
-      mortgageMonthly = safeNum(selectedProp.financials.mortgageAmount);
+    } else if (activeMortgage.isActive && activeMortgage.monthlyPayment > 0) {
+      mortgageMonthly = safeNum(activeMortgage.monthlyPayment);
     }
     const operatingExpenses = Math.max(0, totalExpenses - mortgageMonthly);
 
@@ -411,7 +689,9 @@ export const PropertyAssetManager: React.FC = () => {
       suggestedMortgageBase,
       suggestedExpensesBase,
       baseRentShare,
-      expensesShare
+      expensesShare,
+      isSubrogated: activeMortgage.isSubrogated,
+      activeBankName: activeMortgage.bankName
     };
   }, [selectedProp]);
   const yieldData = useMemo(() => {
@@ -439,8 +719,18 @@ export const PropertyAssetManager: React.FC = () => {
     const grossCapRate = (annualRent / purchasePrice) * 100;
     const netCapRate = (noi / purchasePrice) * 100;
     
-    // Cashflow Netto Annuo dopo la rata del mutuo (Levered Cash Flow)
-    const annualMortgage = (p.financials?.mortgageAmount || 0) * 12;
+    // Cashflow Netto Annuo dopo la rata del mutuo attiva (Levered Cash Flow, Time-Aware con Surroga)
+    const activeMortgage = getActiveMortgageAtDate(p, new Date(), { monthGranularity: true });
+    let annualMortgage = 0;
+    const mortgageCosts = costs.filter(c => c.category === 'MORTGAGE');
+    if (mortgageCosts.length > 0) {
+      mortgageCosts.forEach(c => {
+        if (c.frequency === 'MONTHLY') annualMortgage += safeNum(c.amount) * 12;
+        else if (c.frequency === 'YEARLY') annualMortgage += safeNum(c.amount);
+      });
+    } else if (activeMortgage.isActive && activeMortgage.monthlyPayment > 0) {
+      annualMortgage = safeNum(activeMortgage.monthlyPayment) * 12;
+    }
     const leveredCashFlow = noi - annualMortgage;
     
     // Capitale liquido investito: inserito dall'utente o stimato al 30% del prezzo acquisto
@@ -454,6 +744,7 @@ export const PropertyAssetManager: React.FC = () => {
     if (!selectedProp) return [];
     const targetDate = new Date(analysisDate); const isYearView = analysisFilterType === 'YEAR';
     const iterations = isYearView ? 12 : new Date(targetDate.getFullYear(), targetDate.getMonth() + 1, 0).getDate();
+    const hasExplicitMortgage = (selectedProp.recurringCosts || []).some(c => c.category === 'MORTGAGE');
     return Array.from({ length: iterations }, (_, i) => {
       const label = isYearView ? new Date(targetDate.getFullYear(), i, 1).toLocaleString('it-IT', { month: 'short' }) : (i + 1).toString();
       const datum: any = { name: label }; CATEGORIES.forEach(cat => datum[cat.id] = 0);
@@ -470,6 +761,15 @@ export const PropertyAssetManager: React.FC = () => {
         }
         if (applies) datum[c.category] += isYearView ? safeNum(c.amount) : safeNum(c.amount) / iterations;
       });
+      if (!hasExplicitMortgage) {
+        const stepDate = isYearView
+          ? new Date(targetDate.getFullYear(), i, 1)
+          : new Date(targetDate.getFullYear(), targetDate.getMonth(), i + 1);
+        const mortState = getActiveMortgageAtDate(selectedProp, stepDate, { monthGranularity: isYearView });
+        if (mortState.isActive && mortState.monthlyPayment > 0) {
+          datum['MORTGAGE'] += isYearView ? mortState.monthlyPayment : mortState.monthlyPayment / iterations;
+        }
+      }
       return datum;
     });
   }, [selectedProp, analysisFilterType, analysisDate]);
@@ -482,6 +782,534 @@ export const PropertyAssetManager: React.FC = () => {
   }, [lineData, analysisFilterType]);
 
   const wrapClass = `ipb${theme === 'NEON' ? '' : ' light'}`;
+
+  const formatIsoIt = (iso?: string) => {
+    if (!iso) return '-';
+    const parts = iso.split('-');
+    return parts.length === 3 ? `${parts[2]}/${parts[1]}/${parts[0]}` : iso;
+  };
+
+  const renderSubrogationsSection = (p: Property) => {
+    const timeline = calculateSubrogationTimeline(p, new Date());
+    const { items, activeState, originalMonthlyPayment, originalRate, originalDurationYears, originalStartDate, originalBankName } = timeline;
+
+    return (
+      <div className="subrog-wrap">
+        <div className="subrog-head">
+          <div>
+            <div className="sectlabel" style={{ marginBottom: 3, color: 'var(--indigo)' }}>🔄 Storico Surroghe &amp; Rinegoziazioni Mutuo</div>
+            <div style={{ fontSize: 11, color: 'var(--dim)' }}>
+              Gestisci 1 o più surroghe cronologiche: i flussi passati conservano la vecchia rata, i periodi successivi applicano la nuova
+            </div>
+          </div>
+          {activeState.isSubrogated ? (
+            <span className="subrog-status-pill active">
+              Surroga #{activeState.subrogationIndex} Attiva · {eur(activeState.monthlyPayment)}/m
+            </span>
+          ) : originalMonthlyPayment > 0 ? (
+            <span className="subrog-status-pill orig">
+              Mutuo Originario · {eur(originalMonthlyPayment)}/m
+            </span>
+          ) : null}
+        </div>
+
+        {/* Riepilogo Risparmio Attivo se surrogato */}
+        {activeState.isSubrogated && originalMonthlyPayment > 0 && (
+          <div className="subrog-hero-banner">
+            <div className="shb-col">
+              <span className="shb-lbl">Rata Originaria</span>
+              <span className="shb-val dim" style={{ textDecoration: 'line-through' }}>{eur(originalMonthlyPayment)}/m</span>
+              <span className="shb-sub">{originalBankName || 'Banca Iniziale'} · {originalDurationYears}a</span>
+            </div>
+            <div className="shb-arrow">➔</div>
+            <div className="shb-col">
+              <span className="shb-lbl">Rata Attiva (Surroga #{activeState.subrogationIndex})</span>
+              <span className="shb-val indigo">{eur(activeState.configuredMonthlyPayment)}/m</span>
+              <span className="shb-sub">{activeState.bankName || 'Nuova Banca'} · {activeState.rate}% · {activeState.durationYears}a</span>
+            </div>
+            <div className="shb-col sav">
+              <span className="shb-lbl">Risparmio vs Originario</span>
+              <span className={`shb-val ${originalMonthlyPayment - activeState.configuredMonthlyPayment >= 0 ? 'pos' : 'neg'}`}>
+                {seur(originalMonthlyPayment - activeState.configuredMonthlyPayment)}/mese
+              </span>
+              <span className="shb-sub">
+                {seur((originalMonthlyPayment - activeState.configuredMonthlyPayment) * 12)}/anno
+              </span>
+            </div>
+          </div>
+        )}
+
+        {/* Timeline Cronologica */}
+        <div className="subrog-timeline">
+          {/* Step 0: Mutuo Originario */}
+          {originalMonthlyPayment > 0 && (
+            <div className={`subrog-card orig ${!activeState.isSubrogated && activeState.isActive ? 'current' : ''}`}>
+              <div className="sc-top">
+                <div className="sc-title">
+                  <span className="sc-step">0</span>
+                  <div>
+                    <div className="sc-bank">Mutuo Originario {originalBankName ? `· ${originalBankName}` : ''}</div>
+                    <div className="sc-date">Decorrenza: {formatIsoIt(originalStartDate)} · Durata {originalDurationYears} anni{originalRate > 0 ? ` · Tasso ${originalRate}%` : ''}</div>
+                  </div>
+                </div>
+                <div className="sc-right">
+                  <span className="sc-pay">{eur(originalMonthlyPayment)}<small>/mese</small></span>
+                  <span className={`sc-badge ${!activeState.isSubrogated && activeState.isActive ? 'b-act' : 'b-hist'}`}>
+                    {!activeState.isSubrogated && activeState.isActive ? 'IN CORSO' : 'SOSTITUITO'}
+                  </span>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {items.length === 0 ? (
+            <div className="empty-sm" style={{ padding: '14px', border: '1px dashed var(--border-2)', borderRadius: 10 }}>
+              Nessuna surroga o rinegoziazione registrata per questo immobile. Compila il modulo sottostante per aggiungere una surroga.
+            </div>
+          ) : (
+            items.map((item) => {
+              const { subrogation: sub, index, previousMonthlyPayment, monthlySavings, annualSavings, remainingDurationSavings, totalDurationSavings, endDate, remainingMonths, status } = item;
+              const statusLabel = status === 'ACTIVE' ? 'ATTIVA' : status === 'UPCOMING' ? 'PROGRAMMATA' : status === 'REPLACED' ? 'SOSTITUITA' : 'SCADUTA';
+              const statusCls = status === 'ACTIVE' ? 'b-act' : status === 'UPCOMING' ? 'b-up' : 'b-hist';
+
+              return (
+                <div key={sub.id} className={`subrog-card ${status === 'ACTIVE' ? 'current' : ''}`}>
+                  <div className="sc-top">
+                    <div className="sc-title">
+                      <span className="sc-step indigo">{index}ª</span>
+                      <div>
+                        <div className="sc-bank">
+                          {sub.bankName ? sub.bankName : `Surroga / Rinegoziazione #${index}`}
+                          {sub.rateType && (
+                            <span className="sc-ratetype">
+                              {sub.rateType === 'FIXED' ? 'Tasso Fisso' : 'Tasso Variabile'}
+                            </span>
+                          )}
+                        </div>
+                        <div className="sc-date">
+                          Decorrenza: <strong>{formatIsoIt(sub.date)}</strong> · Scadenza: {formatIsoIt(endDate)} ({sub.newDurationYears} anni)
+                          {sub.newRate !== undefined ? ` · Tasso ${sub.newRate}%` : ''}
+                          {sub.residualPrincipal ? ` · Cap. Residuo ${eur(sub.residualPrincipal)}` : ''}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="sc-right">
+                      <span className="sc-pay indigo">{eur(sub.newMonthlyPayment)}<small>/mese</small></span>
+                      <span className={`sc-badge ${statusCls}`}>{statusLabel}</span>
+                    </div>
+                  </div>
+
+                  {/* Metriche di Risparmio rispetto alla rata precedente */}
+                  <div className="sc-metrics">
+                    <div className="scm-box">
+                      <span className="scm-l">Rata Precedente</span>
+                      <span className="scm-v dim">{eur(previousMonthlyPayment)}/m</span>
+                    </div>
+                    <div className="scm-box">
+                      <span className="scm-l">Risparmio Mensile</span>
+                      <span className={`scm-v ${monthlySavings >= 0 ? 'pos' : 'neg'}`}>
+                        {seur(monthlySavings)}/mese
+                      </span>
+                    </div>
+                    <div className="scm-box">
+                      <span className="scm-l">Risparmio Annuo</span>
+                      <span className={`scm-v ${annualSavings >= 0 ? 'pos' : 'neg'}`}>
+                        {seur(annualSavings)}/anno
+                      </span>
+                    </div>
+                    <div className="scm-box">
+                      <span className="scm-l" title={`Calcolato sui ${remainingMonths} mesi residui (Totale su ${sub.newDurationYears}a: ${seur(totalDurationSavings)})`}>
+                        Risparmio Stimato Residuo
+                      </span>
+                      <span className={`scm-v ${remainingDurationSavings >= 0 ? 'pos' : 'neg'}`}>
+                        {seur(remainingDurationSavings)}
+                      </span>
+                    </div>
+                  </div>
+
+                  {(sub.notes || sub.attachment || true) && (
+                    <div className="sc-foot">
+                      <div className="sc-notes">
+                        {sub.notes && <span>📝 {sub.notes}</span>}
+                        {sub.attachment && (
+                          <a href={sub.attachment.data} download={sub.attachment.name} className="sc-att">
+                            {ic(PATH.doc, 13)} {sub.attachment.name}
+                          </a>
+                        )}
+                      </div>
+                      <div className="sc-actions">
+                        <button
+                          type="button"
+                          className="sc-btn edit"
+                          onClick={() => handleEditSubrogation(sub)}
+                          title="Modifica surroga"
+                        >
+                          ✎ Modifica
+                        </button>
+                        <button
+                          type="button"
+                          className="sc-btn del"
+                          onClick={() => handleDeleteSubrogation(sub.id)}
+                          title="Elimina surroga"
+                        >
+                          {ic(PATH.trash, 13)}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })
+          )}
+        </div>
+
+        {/* RADAR TASSI BANCHE (ITALIA & MILANO) & CONFRONTO SURROGA */}
+        {(() => {
+          const opp = evaluatePropertySubrogation(p, bankCatalog, marketIndices, radarSettings, new Date());
+          if (!opp) return null;
+
+          const filteredOffers = (opp.topOffers || []).filter(ev => {
+            if (radarBankFilter === 'MILAN_ONLY') return ev.offer.isMilanFocused;
+            if (radarBankFilter === 'FIXED') return ev.offer.rateType === 'FIXED';
+            if (radarBankFilter === 'VARIABLE') return ev.offer.rateType === 'VARIABLE';
+            return true;
+          });
+
+          const best = opp.bestOffer;
+
+          return (
+            <div className="radar-box">
+              <div className="radar-head">
+                <div>
+                  <div className="radar-title-row">
+                    <span className="radar-badge-live">📡 RADAR TASSI BANCHE · ITALIA &amp; MILANO</span>
+                    {opp.isAdvantageous && best && (
+                      <span className="radar-badge-hot">
+                        🔥 OFFERTA VANTAGGIOSA (-{eur(best.monthlySavings)}/m)
+                      </span>
+                    )}
+                  </div>
+                  <div className="radar-sub">
+                    Confronto in tempo reale del tuo mutuo attivo ({opp.currentBankName} · <strong>TAN {opp.currentRate.toFixed(2)}%</strong> · Rata <strong>{eur(opp.currentMonthlyPayment)}/m</strong> · Cap. stimato {eur(opp.estimatedResidualPrincipal)} su {opp.remainingYears}a residui) con le offerte Surroga Zero Spese (L. 40/2007)
+                  </div>
+                </div>
+                <div className="radar-actions">
+                  <button
+                    type="button"
+                    className="sc-btn"
+                    onClick={() => handleRefreshBankRates(true)}
+                    disabled={isScanningRates}
+                    title="Aggiorna indici IRS/Euribor e offerte banche tramite AI Grounding"
+                  >
+                    {isScanningRates ? '⏳ Scansione...' : '🔍 Aggiorna Tassi Live'}
+                  </button>
+                  <button
+                    type="button"
+                    className="sc-btn tg-btn"
+                    onClick={() => handleSendRadarTelegramReport([p])}
+                    disabled={isSendingRadarTg}
+                    title="Invia subito il report di confronto su Telegram"
+                  >
+                    {isSendingRadarTg ? '⏳ Invio...' : '✈️ Invia Report Telegram'}
+                  </button>
+                </div>
+              </div>
+
+              {/* Indici di Riferimento Mercato */}
+              <div className="radar-indices-strip">
+                <span className="ri-item">📊 <strong>IRS 10A:</strong> {marketIndices.irs10Y.toFixed(2)}%</span>
+                <span className="ri-item"><strong>IRS 20A:</strong> {marketIndices.irs20Y.toFixed(2)}%</span>
+                <span className="ri-item"><strong>IRS 25A:</strong> {marketIndices.irs25Y.toFixed(2)}%</span>
+                <span className="ri-item"><strong>IRS 30A:</strong> {marketIndices.irs30Y.toFixed(2)}%</span>
+                <span className="ri-item"><strong>Euribor 3M:</strong> {marketIndices.euribor3M.toFixed(2)}%</span>
+                <span className="ri-item"><strong>BCE:</strong> {marketIndices.bceRate.toFixed(2)}%</span>
+                <span className="ri-item" style={{ marginLeft: 'auto', opacity: 0.8 }}>
+                  LTV Stimato: <strong>{opp.estimatedLtv}%</strong>{opp.isGreenProperty ? ` · 🌿 Green Classe ${opp.energyClass}` : ''}
+                </span>
+              </div>
+
+              {radarFeedback && (
+                <div className={`radar-feedback ${radarFeedback.type}`}>
+                  <span>{radarFeedback.message}</span>
+                  <button type="button" onClick={() => setRadarFeedback(null)}>✕</button>
+                </div>
+              )}
+
+              {/* Callout Migliore Offerta Vantaggiosa */}
+              {best && best.monthlySavings > 0 && (
+                <div className={`radar-best-callout ${opp.isAdvantageous ? 'adv' : 'mild'}`}>
+                  <div className="rbc-left">
+                    <div className="rbc-eyebrow">
+                      {opp.isAdvantageous ? '🏆 MIGLIORE OPPORTUNITÀ DI SURROGA RILEVATA' : '💡 MIGLIORE OFFERTA DISPONIBILE SUL MERCATO'}
+                    </div>
+                    <div className="rbc-main">
+                      <strong>{best.offer.bankName}</strong> <span className="rbc-city">({best.offer.hqCity})</span> — <em>{best.offer.productName}</em>
+                    </div>
+                    <div className="rbc-metrics">
+                      <span>Nuovo Tasso: <strong className="pos">TAN {best.appliedTan.toFixed(2)}%</strong> (TAEG {best.appliedTaeg.toFixed(2)}%) [<strong>-{best.rateDelta.toFixed(2)}% / -{best.rateDeltaBps} bps</strong>]</span>
+                      <span>· Nuova Rata: <strong>{eur(best.newMonthlyPayment)}/mese</strong></span>
+                    </div>
+                  </div>
+                  <div className="rbc-right">
+                    <div className="rbc-sav-box">
+                      <span className="rbc-sav-lbl">Risparmio Stimato</span>
+                      <span className="rbc-sav-val">+{eur(best.monthlySavings)}/m · +{eur(best.annualSavings)}/a</span>
+                      <span className="rbc-sav-tot">Totale su {opp.remainingYears}a: <strong>+{eur(best.totalRemainingSavings)}</strong></span>
+                    </div>
+                    <button
+                      type="button"
+                      className="btn primary"
+                      style={{ padding: '9px 13px', fontSize: 10 }}
+                      onClick={() => handleApplyOfferToSubForm(best, opp.remainingYears, opp.estimatedResidualPrincipal)}
+                    >
+                      ⚡ Precompila Surroga
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Filtri Tabella Banche */}
+              <div className="radar-filter-bar">
+                <div className="rf-pills">
+                  <button
+                    type="button"
+                    className={`rf-pill ${radarBankFilter === 'ALL' ? 'on' : ''}`}
+                    onClick={() => setRadarBankFilter('ALL')}
+                  >
+                    Tutte le Banche ({opp.topOffers.length})
+                  </button>
+                  <button
+                    type="button"
+                    className={`rf-pill ${radarBankFilter === 'MILAN_ONLY' ? 'on' : ''}`}
+                    onClick={() => setRadarBankFilter('MILAN_ONLY')}
+                  >
+                    🏙️ Focus Milano ({opp.topOffers.filter(o => o.offer.isMilanFocused).length})
+                  </button>
+                  <button
+                    type="button"
+                    className={`rf-pill ${radarBankFilter === 'FIXED' ? 'on' : ''}`}
+                    onClick={() => setRadarBankFilter('FIXED')}
+                  >
+                    🔒 Tasso Fisso ({opp.topOffers.filter(o => o.offer.rateType === 'FIXED').length})
+                  </button>
+                  <button
+                    type="button"
+                    className={`rf-pill ${radarBankFilter === 'VARIABLE' ? 'on' : ''}`}
+                    onClick={() => setRadarBankFilter('VARIABLE')}
+                  >
+                    📈 Tasso Variabile ({opp.topOffers.filter(o => o.offer.rateType === 'VARIABLE').length})
+                  </button>
+                </div>
+                <span className="rf-threshold-note">
+                  Soglia Alert Telegram: min. <strong>€ {radarSettings.minMonthlySavings}/mese</strong> e <strong>-{radarSettings.minRateDeltaBps} bps</strong>
+                </span>
+              </div>
+
+              {/* Tabella Comparativa Offerte Banche */}
+              <div className="radar-table-wrap">
+                <table className="radar-table">
+                  <thead>
+                    <tr>
+                      <th>Banca &amp; Sede</th>
+                      <th>Prodotto Surroga</th>
+                      <th>TAN / TAEG</th>
+                      <th>Nuova Rata</th>
+                      <th>Risparmio Mensile / Annuo</th>
+                      <th>Risparmio ({opp.remainingYears}a)</th>
+                      <th style={{ textAlign: 'right' }}>Azione</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredOffers.map((ev) => {
+                      const isPos = ev.monthlySavings > 0;
+                      return (
+                        <tr key={ev.offer.bankId} className={ev.isAdvantageous ? 'row-adv' : ''}>
+                          <td>
+                            <div className="rt-bank">
+                              <strong>{ev.offer.bankName}</strong>
+                              {ev.offer.isMilanFocused && <span className="rt-tag milan">🏙️ Milano</span>}
+                            </div>
+                            <div className="rt-sub">{ev.offer.hqCity}</div>
+                          </td>
+                          <td>
+                            <div className="rt-prod">
+                              {ev.offer.productName}
+                              {ev.isGreenRateApplied && <span className="rt-tag green">🌿 Green</span>}
+                            </div>
+                            <div className="rt-sub">
+                              {ev.offer.rateType === 'FIXED' ? 'Tasso Fisso' : 'Tasso Variabile'} ({ev.offer.referenceIndex} + {ev.offer.spread}%) · Zero Spese
+                            </div>
+                          </td>
+                          <td>
+                            <div className="rt-mono">
+                              <strong style={{ color: ev.rateDelta > 0 ? 'var(--pos)' : 'var(--text)' }}>
+                                {ev.appliedTan.toFixed(2)}%
+                              </strong>
+                              <span className="rt-sub-inline"> (TAEG {ev.appliedTaeg.toFixed(2)}%)</span>
+                            </div>
+                            <div className={`rt-delta ${ev.rateDelta > 0 ? 'pos' : 'neg'}`}>
+                              {ev.rateDelta > 0 ? `-${ev.rateDelta.toFixed(2)}% (-${ev.rateDeltaBps} bps)` : `+${Math.abs(ev.rateDelta).toFixed(2)}%`}
+                            </div>
+                          </td>
+                          <td>
+                            <div className="rt-mono"><strong>{eur(ev.newMonthlyPayment)}</strong><small>/m</small></div>
+                            <div className="rt-sub">Attuale: {eur(opp.currentMonthlyPayment)}/m</div>
+                          </td>
+                          <td>
+                            <div className={`rt-mono ${isPos ? 'pos' : 'neg'}`}>
+                              <strong>{seur(ev.monthlySavings)}/mese</strong>
+                            </div>
+                            <div className="rt-sub">{seur(ev.annualSavings)}/anno</div>
+                          </td>
+                          <td>
+                            <div className={`rt-mono ${isPos ? 'pos' : 'neg'}`}>
+                              <strong>{seur(ev.totalRemainingSavings)}</strong>
+                            </div>
+                            {ev.isAdvantageous && <span className="rt-tag adv-pill">Consigliata</span>}
+                          </td>
+                          <td style={{ textAlign: 'right' }}>
+                            <button
+                              type="button"
+                              className="sc-btn edit"
+                              onClick={() => handleApplyOfferToSubForm(ev, opp.remainingYears, opp.estimatedResidualPrincipal)}
+                              title="Copia questi parametri nel modulo Nuova Surroga qui sotto"
+                            >
+                              ⚡ Usa Offerta
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* Form Inserimento / Modifica Surroga */}
+        <div className="subrog-form">
+          <div className="sf-head">
+            <span>{editingSubId ? '✎ Modifica Surroga / Rinegoziazione' : '+ Nuova Surroga / Rinegoziazione Mutuo'}</span>
+            {editingSubId && (
+              <button type="button" className="sc-btn" onClick={() => resetSubForm(p)}>
+                Annulla Modifica
+              </button>
+            )}
+          </div>
+          <div className="grid3" style={{ gap: 10 }}>
+            <div className="field">
+              <label className="indigo">Data Decorrenza *</label>
+              <input
+                className="input"
+                type="date"
+                value={subForm.date || ''}
+                onChange={e => setSubForm({ ...subForm, date: e.target.value })}
+              />
+            </div>
+            <div className="field">
+              <label className="indigo">Nuova Banca</label>
+              <input
+                className="input"
+                type="text"
+                value={subForm.bankName || ''}
+                onChange={e => setSubForm({ ...subForm, bankName: e.target.value })}
+                placeholder="Es. Intesa Sanpaolo, UniCredit..."
+              />
+            </div>
+            <div className="field">
+              <label className="indigo">Nuova Rata Mensile (€) *</label>
+              <input
+                className="input mono"
+                type="number"
+                step="0.01"
+                value={subForm.newMonthlyPayment || ''}
+                onChange={e => setSubForm({ ...subForm, newMonthlyPayment: parseFloat(e.target.value) || 0 })}
+                placeholder="Es. 460"
+              />
+            </div>
+          </div>
+
+          <div className="grid3" style={{ gap: 10, marginTop: 10 }}>
+            <div className="field">
+              <label className="indigo">Nuovo Tasso (%)</label>
+              <input
+                className="input mono"
+                type="number"
+                step="0.05"
+                value={subForm.newRate ?? ''}
+                onChange={e => setSubForm({ ...subForm, newRate: e.target.value === '' ? undefined : parseFloat(e.target.value) })}
+                placeholder="Es. 2.55"
+              />
+            </div>
+            <div className="field">
+              <label className="indigo">Tipo Tasso</label>
+              <select
+                className="input"
+                value={subForm.rateType || 'FIXED'}
+                onChange={e => setSubForm({ ...subForm, rateType: e.target.value as 'FIXED' | 'VARIABLE' })}
+              >
+                <option value="FIXED">Fisso</option>
+                <option value="VARIABLE">Variabile</option>
+              </select>
+            </div>
+            <div className="field">
+              <label className="indigo">Nuova Durata (Anni) *</label>
+              <input
+                className="input mono"
+                type="number"
+                min="1"
+                max="40"
+                value={subForm.newDurationYears || ''}
+                onChange={e => setSubForm({ ...subForm, newDurationYears: parseFloat(e.target.value) || 20 })}
+                placeholder="20"
+              />
+            </div>
+          </div>
+
+          <div className="grid3" style={{ gap: 10, marginTop: 10, alignItems: 'end' }}>
+            <div className="field">
+              <label className="indigo">Capitale Residuo (€ - Opz.)</label>
+              <input
+                className="input mono"
+                type="number"
+                value={subForm.residualPrincipal ?? ''}
+                onChange={e => setSubForm({ ...subForm, residualPrincipal: e.target.value === '' ? undefined : parseFloat(e.target.value) })}
+                placeholder="Es. 95000"
+              />
+            </div>
+            <div className="field">
+              <label className="indigo">Note / Condizioni</label>
+              <input
+                className="input"
+                type="text"
+                value={subForm.notes || ''}
+                onChange={e => setSubForm({ ...subForm, notes: e.target.value })}
+                placeholder="Es. Surroga a costo zero, perizia inclusa"
+              />
+            </div>
+            <div className="field">
+              <label className="indigo">Atto / Allegato PDF</label>
+              <label className="subrog-file-btn">
+                {ic(PATH.doc, 13)}
+                <span>{subForm.attachment ? subForm.attachment.name : 'Allega PDF / Doc'}</span>
+                <input type="file" accept=".pdf,.doc,.docx,.jpg,.png" onChange={handleUploadSubrogationAttachment} hidden />
+              </label>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            className="btn primary wide"
+            style={{ marginTop: 12, padding: '11px 16px' }}
+            onClick={handleSaveSubrogation}
+          >
+            {ic(PATH.plus, 14, 2.4)} {editingSubId ? 'Salva Modifiche Surroga' : 'Registra Surroga Mutuo'}
+          </button>
+        </div>
+      </div>
+    );
+  };
 
   /* ============================ DETAIL ============================ */
   const renderDetail = (p: Property) => (
@@ -545,14 +1373,19 @@ export const PropertyAssetManager: React.FC = () => {
                   </div>
                 </div>
                 <div>
-                  <div className="sectlabel">Dettagli Mutuo</div>
+                  <div className="sectlabel">Dettagli Mutuo Originario</div>
                   <div className="mortbox">
-                    <div className="field"><label className="indigo">Rata Mensile Mutuo</label><input className="input mono" type="number" value={p.financials?.mortgageAmount || ''} onChange={e => setSelectedProp({ ...p, financials: { ...(p.financials || { mortgageAmount: 0, condoFees: 0, defaultTaxRate: 21 }), mortgageAmount: parseFloat(e.target.value) || 0 } })} placeholder="Es. 550" /></div>
                     <div className="grid2">
+                      <div className="field"><label className="indigo">Rata Mensile Mutuo Originario (€)</label><input className="input mono" type="number" value={p.financials?.mortgageAmount || ''} onChange={e => setSelectedProp({ ...p, financials: { ...(p.financials || { mortgageAmount: 0, condoFees: 0, defaultTaxRate: 21 }), mortgageAmount: parseFloat(e.target.value) || 0 } })} placeholder="Es. 550" /></div>
+                      <div className="field"><label className="indigo">Banca Originaria</label><input className="input" type="text" value={p.financials?.originalBankName || ''} onChange={e => setSelectedProp({ ...p, financials: { ...(p.financials || { mortgageAmount: 0, condoFees: 0, defaultTaxRate: 21 }), originalBankName: e.target.value } })} placeholder="Es. Banca Intesa" /></div>
+                    </div>
+                    <div className="grid3">
+                      <div className="field"><label className="indigo">Tasso Iniziale (%)</label><input className="input mono" type="number" step="0.05" value={p.financials?.mortgageRate || ''} onChange={e => setSelectedProp({ ...p, financials: { ...(p.financials || { mortgageAmount: 0, condoFees: 0, defaultTaxRate: 21 }), mortgageRate: parseFloat(e.target.value) || 0 } })} placeholder="Es. 3.5" /></div>
                       <div className="field"><label className="indigo">Durata (Anni)</label><input className="input mono" type="number" value={p.financials?.mortgageDuration || ''} onChange={e => setSelectedProp({ ...p, financials: { ...(p.financials || { mortgageAmount: 0, condoFees: 0, defaultTaxRate: 21 }), mortgageDuration: parseFloat(e.target.value) || 0 } })} placeholder="20" /></div>
                       <div className="field"><label className="indigo">Data Inizio</label><input className="input" type="date" value={p.financials?.mortgageStartDate || ''} onChange={e => setSelectedProp({ ...p, financials: { ...(p.financials || { mortgageAmount: 0, condoFees: 0, defaultTaxRate: 21 }), mortgageStartDate: e.target.value } })} /></div>
                     </div>
                   </div>
+                  {renderSubrogationsSection(p)}
                 </div>
                 <div>
                   <div className="sectlabel">Dati Locativi e Investimento</div>
@@ -727,55 +1560,61 @@ export const PropertyAssetManager: React.FC = () => {
 
       {activeTab === 'ECONOMICA' && (
         <div className="econgrid">
-          <div className="panel pad">
-            <div className="pTitle">
-              <div className="ptl"><span className="iconpill">{ic(PATH.cart, 16)}</span>
-                <div><h3>Spese Ricorrenti</h3><div className="subt">Uscite associate a questa proprietà</div></div></div>
-            </div>
-            <div className="catrow">
-              <button className={`catpill${filterCategory === 'ALL' ? ' on' : ''}`} style={filterCategory === 'ALL' ? { background: 'var(--accent)', color: '#fff', borderColor: 'transparent' } : undefined} onClick={() => setFilterCategory('ALL')}>Tutte</button>
-              {CATEGORIES.map(c => (
-                <button key={c.id} className={`catpill${filterCategory === c.id ? ' on' : ''}`} style={filterCategory === c.id ? { background: c.stroke, color: '#fff', borderColor: 'transparent' } : undefined} onClick={() => setFilterCategory(c.id)}>
-                  <span className="dot" style={{ background: c.stroke }} />{c.label}
-                </button>
-              ))}
-            </div>
-            <div className="costlist">
-              {filteredCosts.length === 0 ? (
-                <div className="empty-sm">Nessuna spesa in questa categoria</div>
-              ) : filteredCosts.map(cost => (
-                <div className="costrow" key={cost.id}>
-                  <div className="cati" style={{ background: (CAT_COLOR[cost.category] || '#8b97ab') + '22', color: CAT_COLOR[cost.category] || '#8b97ab' }}>{ic(CAT_ICON[cost.category] || PATH.cart, 15)}</div>
-                  <div className="cinfo"><div className="cdesc">{cost.name}</div><div className="cfreq">{CAT_LABEL[cost.category]}</div></div>
-                  <div className="num camt">{eur(cost.amount)}</div>
-                  <div className="cdate">{formatCostDate(cost)}</div>
-                  <div><span className="freqpill">{cost.frequency === 'MONTHLY' ? 'Mensile' : cost.frequency === 'YEARLY' ? 'Annuale' : 'Una tantum'}</span></div>
-                  <button className="delc" onClick={() => handleDeleteCost(cost.id)} title="Elimina spesa">{ic(PATH.trash, 15)}</button>
-                </div>
-              ))}
-            </div>
-            <div className="addcost">
-              <div className="adtitle">Nuova Spesa Economica</div>
-              <div className="adgrid">
-                <div className="field span2"><label>Descrizione Voce</label><input className="input" value={newCost.name} onChange={e => setNewCost({ ...newCost, name: e.target.value })} placeholder="Es. Spesa Condominiale Ordinaria" /></div>
-                <div className="field"><label>Importo €</label><input className="input mono" type="number" value={newCost.amount || ''} onChange={e => setNewCost({ ...newCost, amount: parseFloat(e.target.value) || 0 })} placeholder="0" /></div>
-                <div className="field"><label>Categoria</label>
-                  <select className="input" value={newCost.category} onChange={e => setNewCost({ ...newCost, category: e.target.value as any })}>{CATEGORIES.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}</select></div>
-                <div className="field"><label>Frequenza</label>
-                  <select className="input" value={newCost.frequency} onChange={e => setNewCost({ ...newCost, frequency: e.target.value as any })}>
-                    <option value="MONTHLY">Mensile</option><option value="YEARLY">Annuale</option><option value="ONE_OFF">Una Tantum</option></select></div>
-                {newCost.frequency === 'MONTHLY' && (<>
-                  <div className="field"><label>Mese Inizio</label><select className="input" value={newCost.referenceMonth} onChange={e => setNewCost({ ...newCost, referenceMonth: parseInt(e.target.value) })}>{MONTHS.map((m, i) => <option key={i} value={i}>{m}</option>)}</select></div>
-                  <div className="field"><label>Anno Inizio</label><select className="input" value={newCost.referenceYear} onChange={e => setNewCost({ ...newCost, referenceYear: parseInt(e.target.value) })}>{YEARS.map(y => <option key={y} value={y}>{y}</option>)}</select></div>
-                </>)}
-                {newCost.frequency === 'YEARLY' && (
-                  <div className="field"><label>Anno Riferimento</label><select className="input" value={newCost.referenceYear} onChange={e => setNewCost({ ...newCost, referenceYear: parseInt(e.target.value) })}>{YEARS.map(y => <option key={y} value={y}>{y}</option>)}</select></div>
-                )}
-                {newCost.frequency === 'ONE_OFF' && (
-                  <div className="field"><label>Data Scadenza</label><input className="input" type="date" value={newCost.date} onChange={e => setNewCost({ ...newCost, date: e.target.value })} /></div>
-                )}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+            <div className="panel pad">
+              <div className="pTitle">
+                <div className="ptl"><span className="iconpill">{ic(PATH.cart, 16)}</span>
+                  <div><h3>Spese Ricorrenti</h3><div className="subt">Uscite associate a questa proprietà</div></div></div>
               </div>
-              <button className="btn primary wide" onClick={handleAddCost}>{ic(PATH.plus, 14, 2.4)} Inserisci Spesa</button>
+              <div className="catrow">
+                <button className={`catpill${filterCategory === 'ALL' ? ' on' : ''}`} style={filterCategory === 'ALL' ? { background: 'var(--accent)', color: '#fff', borderColor: 'transparent' } : undefined} onClick={() => setFilterCategory('ALL')}>Tutte</button>
+                {CATEGORIES.map(c => (
+                  <button key={c.id} className={`catpill${filterCategory === c.id ? ' on' : ''}`} style={filterCategory === c.id ? { background: c.stroke, color: '#fff', borderColor: 'transparent' } : undefined} onClick={() => setFilterCategory(c.id)}>
+                    <span className="dot" style={{ background: c.stroke }} />{c.label}
+                  </button>
+                ))}
+              </div>
+              <div className="costlist">
+                {filteredCosts.length === 0 ? (
+                  <div className="empty-sm">Nessuna spesa in questa categoria</div>
+                ) : filteredCosts.map(cost => (
+                  <div className="costrow" key={cost.id}>
+                    <div className="cati" style={{ background: (CAT_COLOR[cost.category] || '#8b97ab') + '22', color: CAT_COLOR[cost.category] || '#8b97ab' }}>{ic(CAT_ICON[cost.category] || PATH.cart, 15)}</div>
+                    <div className="cinfo"><div className="cdesc">{cost.name}</div><div className="cfreq">{CAT_LABEL[cost.category]}</div></div>
+                    <div className="num camt">{eur(cost.amount)}</div>
+                    <div className="cdate">{formatCostDate(cost)}</div>
+                    <div><span className="freqpill">{cost.frequency === 'MONTHLY' ? 'Mensile' : cost.frequency === 'YEARLY' ? 'Annuale' : 'Una tantum'}</span></div>
+                    <button className="delc" onClick={() => handleDeleteCost(cost.id)} title="Elimina spesa">{ic(PATH.trash, 15)}</button>
+                  </div>
+                ))}
+              </div>
+              <div className="addcost">
+                <div className="adtitle">Nuova Spesa Economica</div>
+                <div className="adgrid">
+                  <div className="field span2"><label>Descrizione Voce</label><input className="input" value={newCost.name} onChange={e => setNewCost({ ...newCost, name: e.target.value })} placeholder="Es. Spesa Condominiale Ordinaria" /></div>
+                  <div className="field"><label>Importo €</label><input className="input mono" type="number" value={newCost.amount || ''} onChange={e => setNewCost({ ...newCost, amount: parseFloat(e.target.value) || 0 })} placeholder="0" /></div>
+                  <div className="field"><label>Categoria</label>
+                    <select className="input" value={newCost.category} onChange={e => setNewCost({ ...newCost, category: e.target.value as any })}>{CATEGORIES.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}</select></div>
+                  <div className="field"><label>Frequenza</label>
+                    <select className="input" value={newCost.frequency} onChange={e => setNewCost({ ...newCost, frequency: e.target.value as any })}>
+                      <option value="MONTHLY">Mensile</option><option value="YEARLY">Annuale</option><option value="ONE_OFF">Una Tantum</option></select></div>
+                  {newCost.frequency === 'MONTHLY' && (<>
+                    <div className="field"><label>Mese Inizio</label><select className="input" value={newCost.referenceMonth} onChange={e => setNewCost({ ...newCost, referenceMonth: parseInt(e.target.value) })}>{MONTHS.map((m, i) => <option key={i} value={i}>{m}</option>)}</select></div>
+                    <div className="field"><label>Anno Inizio</label><select className="input" value={newCost.referenceYear} onChange={e => setNewCost({ ...newCost, referenceYear: parseInt(e.target.value) })}>{YEARS.map(y => <option key={y} value={y}>{y}</option>)}</select></div>
+                  </>)}
+                  {newCost.frequency === 'YEARLY' && (
+                    <div className="field"><label>Anno Riferimento</label><select className="input" value={newCost.referenceYear} onChange={e => setNewCost({ ...newCost, referenceYear: parseInt(e.target.value) })}>{YEARS.map(y => <option key={y} value={y}>{y}</option>)}</select></div>
+                  )}
+                  {newCost.frequency === 'ONE_OFF' && (
+                    <div className="field"><label>Data Scadenza</label><input className="input" type="date" value={newCost.date} onChange={e => setNewCost({ ...newCost, date: e.target.value })} /></div>
+                  )}
+                </div>
+                <button className="btn primary wide" onClick={handleAddCost}>{ic(PATH.plus, 14, 2.4)} Inserisci Spesa</button>
+              </div>
+            </div>
+
+            <div className="panel pad">
+              {renderSubrogationsSection(p)}
             </div>
           </div>
 
@@ -951,7 +1790,7 @@ export const PropertyAssetManager: React.FC = () => {
                   <div className="sbi-val">{eur(rentWidgetData.baseRentShare)}<span className="sbi-per">/m</span></div>
                   <div className="sbi-sublist">
                     <div className="sbi-subrow">
-                      <span>Rata Mutuo</span>
+                      <span>Rata Mutuo{rentWidgetData.isSubrogated ? ' (Surroga)' : ''}</span>
                       <span>{rentWidgetData.mortgageMonthly > 0 ? `${eur(rentWidgetData.mortgageMonthly)}/m` : 'Nessun Mutuo'}</span>
                     </div>
                     {rentWidgetData.netProfit > 0 && (
@@ -1016,7 +1855,7 @@ export const PropertyAssetManager: React.FC = () => {
                 <div className="l">
                   <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                     <span style={{ color: 'var(--indigo)' }}>🏦</span>
-                    <span>Quota Base Copertura Mutuo</span>
+                    <span>Quota Base Copertura Mutuo{rentWidgetData.isSubrogated ? ` (${rentWidgetData.activeBankName || 'Surroga'})` : ''}</span>
                   </span>
                   <span className="num">{eur(rentWidgetData.mortgageMonthly)}/m</span>
                 </div>
@@ -1146,7 +1985,18 @@ export const PropertyAssetManager: React.FC = () => {
           <h2>Il Mio Patrimonio</h2>
           <p>Gestione centralizzata e ottimizzazione dei tuoi asset immobiliari</p>
         </div>
-        <button className="btn primary" onClick={() => { setNewPropData({ name: '', address: '', type: 'RESIDENTIAL', status: 'MAIN_RESIDENCE', purchasePrice: 0, currentValue: 0, notes: '', coordinates: { lat: 0, lng: 0 } }); (document.getElementById('new_property_modal') as any)?.showModal(); }}>{ic(PATH.plus, 15, 2.4)} Aggiungi Immobile</button>
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+          <button
+            className="btn radar-open-btn"
+            onClick={() => (document.getElementById('mortgage_radar_modal') as any)?.showModal()}
+          >
+            📡 Radar Tassi &amp; Banche Milano
+            {portfolioRadarReport.advantageousCount > 0 && (
+              <span className="radar-count-pill">{portfolioRadarReport.advantageousCount}</span>
+            )}
+          </button>
+          <button className="btn primary" onClick={() => { setNewPropData({ name: '', address: '', type: 'RESIDENTIAL', status: 'MAIN_RESIDENCE', purchasePrice: 0, currentValue: 0, notes: '', coordinates: { lat: 0, lng: 0 } }); (document.getElementById('new_property_modal') as any)?.showModal(); }}>{ic(PATH.plus, 15, 2.4)} Aggiungi Immobile</button>
+        </div>
       </div>
 
       <div className="kpis">
@@ -1164,6 +2014,51 @@ export const PropertyAssetManager: React.FC = () => {
         </div>
       </div>
 
+      {/* Banner Opportunità Surroga Mutui se sono presenti mutui attivi */}
+      {portfolioRadarReport.propertiesAnalyzedCount > 0 && (
+        <div className={`radar-portfolio-banner ${portfolioRadarReport.advantageousCount > 0 ? 'has-adv' : ''}`}>
+          <div className="rpb-left">
+            <span className="rpb-icon">🏦</span>
+            <div>
+              <div className="rpb-title">
+                {portfolioRadarReport.advantageousCount > 0
+                  ? `🔥 Radar Mutui (Banche Italia & Milano): ${portfolioRadarReport.advantageousCount} ${portfolioRadarReport.advantageousCount === 1 ? 'Offerta Vantaggiosa Rilevata' : 'Offerte Vantaggiose Rilevate'}!`
+                  : `📡 Radar Mutui Attivo su ${portfolioRadarReport.propertiesAnalyzedCount} immobili (${portfolioRadarReport.banksMonitoredCount} banche monitorate)`}
+              </div>
+              <div className="rpb-desc">
+                {portfolioRadarReport.advantageousCount > 0
+                  ? `Risparmio potenziale complessivo tramite surroga a zero spese: +${eur(portfolioRadarReport.totalPotentialMonthlySavings)}/mese (+${eur(portfolioRadarReport.totalPotentialAnnualSavings)}/anno · +${eur(portfolioRadarReport.totalPotentialRemainingSavings)} a scadenza)`
+                  : `Indici attuali: IRS 20A ${marketIndices.irs20Y.toFixed(2)}% · IRS 25A ${marketIndices.irs25Y.toFixed(2)}% · Euribor 3M ${marketIndices.euribor3M.toFixed(2)}% · BCE ${marketIndices.bceRate.toFixed(2)}%`}
+              </div>
+            </div>
+          </div>
+          <div className="rpb-actions">
+            <button
+              type="button"
+              className="sc-btn"
+              onClick={() => (document.getElementById('mortgage_radar_modal') as any)?.showModal()}
+            >
+              📊 Confronta Banche
+            </button>
+            <button
+              type="button"
+              className="sc-btn tg-btn"
+              onClick={() => handleSendRadarTelegramReport()}
+              disabled={isSendingRadarTg}
+            >
+              {isSendingRadarTg ? '⏳ Invio...' : '✈️ Invia Report su Telegram'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {radarFeedback && (
+        <div className={`radar-feedback ${radarFeedback.type}`}>
+          <span>{radarFeedback.message}</span>
+          <button type="button" onClick={() => setRadarFeedback(null)}>✕</button>
+        </div>
+      )}
+
       {properties.length === 0 ? (
         <div className="emptystate">{ic(PATH.building, 40, 1.4)}<p className="t">Nessun immobile in portafoglio</p><p className="s">Fai clic su "Aggiungi Immobile" per iniziare a tracciare i tuoi asset</p></div>
       ) : (
@@ -1171,8 +2066,9 @@ export const PropertyAssetManager: React.FC = () => {
           {properties.map(p => {
             const ms = calculateMortgageStats(p); const gain = safeNum(p.currentValue) - safeNum(p.purchasePrice);
             const code = (p.name || '??').split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
+            const propOpp = portfolioRadarReport.opportunities.find(o => o.propertyId === p.id);
             return (
-              <div className="card" key={p.id} onClick={() => { setSelectedProp(p); setActiveTab('ANAGRAFICA'); setFilterCategory('ALL'); }}>
+              <div className="card" key={p.id} onClick={() => { setSelectedProp(p); resetSubForm(p); setActiveTab('ANAGRAFICA'); setFilterCategory('ALL'); }}>
                 <div className="chead">
                   <div className="cl"><div className="tag2">{code}</div><div className="cmin"><div className="nm">{p.name}</div><div className="ad">{p.address || 'Nessun indirizzo inserito'}</div></div></div>
                   <span className={`badge ${STATUS_CLASS[p.status]}`}>{STATUS_LABEL[p.status]}</span>
@@ -1183,12 +2079,20 @@ export const PropertyAssetManager: React.FC = () => {
                 </div>
                 {ms ? (
                   <div className="mort">
-                    <div className="mt"><span className="micro indigo">Stato Mutuo</span><span className="num indigo sm">{ms.percent.toFixed(0)}%</span></div>
+                    <div className="mt">
+                      <span className="micro indigo">Stato Mutuo{ms.isSubrogated ? ` · Surrogato${ms.bankName ? ` (${ms.bankName})` : ''}` : ''}</span>
+                      <span className="num indigo sm">{ms.percent.toFixed(0)}%</span>
+                    </div>
                     <div className="bar"><i style={{ width: `${ms.percent}%` }} /></div>
                     <div className="mfoot">
                       <div><div className="micro xs">Versato</div><div className="num sm">{eur(ms.paid)}</div></div>
                       <div className="r"><div className="micro xs">Residuo</div><div className="num sm">{eur(ms.remaining)}</div></div>
                     </div>
+                    {propOpp?.isAdvantageous && propOpp.bestOffer && (
+                      <div className="mort-adv-tag">
+                        🔥 Surroga consigliata: <strong>-{eur(propOpp.bestOffer.monthlySavings)}/m</strong> ({propOpp.bestOffer.offer.bankName.split('(')[0].trim()} · {propOpp.bestOffer.appliedTan.toFixed(2)}%)
+                      </div>
+                    )}
                   </div>
                 ) : (
                   <div className="mort none">{ic(PATH.home, 15)}<span>Nessun mutuo attivo</span></div>
@@ -1202,6 +2106,183 @@ export const PropertyAssetManager: React.FC = () => {
           })}
         </div>
       )}
+
+      {/* Modal Radar Mutui & Banche (Italia & Milano) */}
+      <dialog id="mortgage_radar_modal" className="ipb-modal radar-wide-modal">
+        <div className="mhead">
+          <div>
+            <h3>📡 Radar Tassi Mutui &amp; Surroghe (Banche Italia &amp; Milano)</h3>
+            <p>Monitoraggio automatico tassi IRS/Euribor, confronto coi tuoi mutui e invio report su Telegram</p>
+          </div>
+          <button className="mclose" onClick={() => (document.getElementById('mortgage_radar_modal') as any)?.close()}>✕</button>
+        </div>
+        <div className="mbody" style={{ maxHeight: '78vh', overflowY: 'auto' }}>
+          {/* Barra Indici & Azioni Rapide */}
+          <div className="radar-indices-strip">
+            <span className="ri-item">📊 <strong>IRS 10A:</strong> {marketIndices.irs10Y.toFixed(2)}%</span>
+            <span className="ri-item"><strong>IRS 20A:</strong> {marketIndices.irs20Y.toFixed(2)}%</span>
+            <span className="ri-item"><strong>IRS 25A:</strong> {marketIndices.irs25Y.toFixed(2)}%</span>
+            <span className="ri-item"><strong>Euribor 3M:</strong> {marketIndices.euribor3M.toFixed(2)}%</span>
+            <span className="ri-item"><strong>BCE:</strong> {marketIndices.bceRate.toFixed(2)}%</span>
+            <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+              <button
+                type="button"
+                className="sc-btn"
+                onClick={() => handleRefreshBankRates(true)}
+                disabled={isScanningRates}
+              >
+                {isScanningRates ? '⏳ Aggiornamento...' : '🔍 Aggiorna Tassi Live (AI)'}
+              </button>
+              <button
+                type="button"
+                className="sc-btn tg-btn"
+                onClick={() => handleSendRadarTelegramReport()}
+                disabled={isSendingRadarTg}
+              >
+                {isSendingRadarTg ? '⏳ Invio...' : '✈️ Invia Report su Telegram'}
+              </button>
+            </div>
+          </div>
+
+          {radarFeedback && (
+            <div className={`radar-feedback ${radarFeedback.type}`}>
+              <span>{radarFeedback.message}</span>
+              <button type="button" onClick={() => setRadarFeedback(null)}>✕</button>
+            </div>
+          )}
+
+          {/* Soglie di Configurazione Alert */}
+          <div className="radar-config-bar" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))' }}>
+            <div className="field" style={{ margin: 0 }}>
+              <label>Risparmio Minimo Alert (€/mese)</label>
+              <input
+                type="number"
+                className="input mono"
+                style={{ padding: '8px 10px', fontSize: 12 }}
+                value={radarSettings.minMonthlySavings}
+                onChange={e => handleSaveRadarThresholds({ ...radarSettings, minMonthlySavings: Math.max(0, isNaN(parseFloat(e.target.value)) ? 0 : parseFloat(e.target.value)) })}
+              />
+            </div>
+            <div className="field" style={{ margin: 0 }}>
+              <label>Riduzione Tasso Minima (bps, 25 = 0.25%)</label>
+              <input
+                type="number"
+                className="input mono"
+                style={{ padding: '8px 10px', fontSize: 12 }}
+                value={radarSettings.minRateDeltaBps}
+                onChange={e => handleSaveRadarThresholds({ ...radarSettings, minRateDeltaBps: Math.max(0, isNaN(parseInt(e.target.value, 10)) ? 0 : parseInt(e.target.value, 10)) })}
+              />
+            </div>
+            <div className="field" style={{ margin: 0 }}>
+              <label>Preferenza Tasso</label>
+              <select
+                className="input"
+                style={{ padding: '8px 10px', fontSize: 12 }}
+                value={radarSettings.preferredRateType}
+                onChange={e => handleSaveRadarThresholds({ ...radarSettings, preferredRateType: e.target.value as any })}
+              >
+                <option value="ALL">Fisso &amp; Variabile</option>
+                <option value="FIXED">Solo Tasso Fisso</option>
+                <option value="VARIABLE">Solo Tasso Variabile</option>
+              </select>
+            </div>
+            <div className="field" style={{ margin: 0 }}>
+              <label>Chat ID Telegram (Opz.)</label>
+              <input
+                type="text"
+                className="input mono"
+                style={{ padding: '8px 10px', fontSize: 12 }}
+                placeholder="Default: Chat ID Proprietario"
+                value={radarSettings.recipientChatId || ''}
+                onChange={e => handleSaveRadarThresholds({ ...radarSettings, recipientChatId: e.target.value || undefined })}
+              />
+            </div>
+            <div className="field" style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 8, paddingTop: 14 }}>
+              <input
+                type="checkbox"
+                checked={radarSettings.autoTelegramAlert}
+                onChange={e => handleSaveRadarThresholds({ ...radarSettings, autoTelegramAlert: e.target.checked })}
+                style={{ width: 16, height: 16, cursor: 'pointer' }}
+              />
+              <span style={{ fontSize: 11.5, fontWeight: 600 }}>Notifica Automatica Telegram</span>
+            </div>
+          </div>
+
+          {/* Elenco Opportunità per Immobile */}
+          {portfolioRadarReport.opportunities.length === 0 ? (
+            <div className="empty-sm" style={{ border: '1px dashed var(--border-2)', borderRadius: 10 }}>
+              Nessun mutuo attivo rilevato sugli immobili in portafoglio. Configura i dati del mutuo nella scheda Anagrafica di un immobile per attivare il confronto automatico.
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              {portfolioRadarReport.opportunities.map(opp => {
+                const best = opp.bestOffer;
+                return (
+                  <div key={opp.propertyId} className={`subrog-card ${opp.isAdvantageous ? 'current' : ''}`}>
+                    <div className="sc-top">
+                      <div>
+                        <div className="sc-bank">
+                          🏠 {opp.propertyName}
+                          {opp.isGreenProperty && <span className="rt-tag green">🌿 Classe {opp.energyClass}</span>}
+                          {opp.isAdvantageous ? (
+                            <span className="radar-badge-hot">🔥 Surroga Vantaggiosa</span>
+                          ) : (
+                            <span className="sc-ratetype">Tasso già competitivo</span>
+                          )}
+                        </div>
+                        <div className="sc-date">
+                          Mutuo attuale: <strong>{opp.currentBankName}</strong> · Rata <strong>{eur(opp.currentMonthlyPayment)}/mese</strong> · TAN <strong>{opp.currentRate.toFixed(2)}%</strong> · Durata residua {opp.remainingYears} anni (Cap. stimato {eur(opp.estimatedResidualPrincipal)})
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        className="sc-btn edit"
+                        onClick={() => {
+                          const targetProp = properties.find(x => x.id === opp.propertyId);
+                          if (targetProp) {
+                            (document.getElementById('mortgage_radar_modal') as any)?.close();
+                            setSelectedProp(targetProp);
+                            resetSubForm(targetProp);
+                            if (best) handleApplyOfferToSubForm(best, opp.remainingYears, opp.estimatedResidualPrincipal);
+                            setActiveTab('ANAGRAFICA');
+                          }
+                        }}
+                      >
+                        ⚡ Apri &amp; Simula Surroga
+                      </button>
+                    </div>
+
+                    {best && (
+                      <div className="sc-metrics">
+                        <div className="scm-box">
+                          <span className="scm-l">Migliore Banca ({best.offer.hqCity.split('(')[0].trim()})</span>
+                          <span className="scm-v">{best.offer.bankName.split('(')[0].trim()} · {best.appliedTan.toFixed(2)}%</span>
+                        </div>
+                        <div className="scm-box">
+                          <span className="scm-l">Nuova Rata Stimata</span>
+                          <span className="scm-v indigo">{eur(best.newMonthlyPayment)}/mese (-{best.rateDeltaBps} bps)</span>
+                        </div>
+                        <div className="scm-box">
+                          <span className="scm-l">Risparmio Mensile / Annuo</span>
+                          <span className={`scm-v ${best.monthlySavings >= 0 ? 'pos' : 'neg'}`}>
+                            {seur(best.monthlySavings)}/m · {seur(best.annualSavings)}/a
+                          </span>
+                        </div>
+                        <div className="scm-box">
+                          <span className="scm-l">Risparmio Totale ({opp.remainingYears}a)</span>
+                          <span className={`scm-v ${best.totalRemainingSavings >= 0 ? 'pos' : 'neg'}`}>
+                            {seur(best.totalRemainingSavings)}
+                          </span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </dialog>
 
       <dialog id="new_property_modal" className="ipb-modal">
         <div className="mhead"><div><h3>Nuovo Immobile</h3><p>Inserisci un nuovo asset nel tuo patrimonio</p></div>
@@ -1359,6 +2440,61 @@ const IPB_CSS = `
 .ipb .dropzone{ border:1.5px dashed var(--border-2); border-radius:10px; padding:18px; text-align:center; font-family:var(--mono); font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:var(--faint); cursor:pointer; display:flex; align-items:center; justify-content:center; gap:8px; }
 .ipb .dropzone:hover{ border-color:var(--accent); color:var(--dim); }
 
+/* subrogations & renegotiations */
+.ipb .subrog-wrap{ background:var(--inset); border:1px solid var(--border-2); border-radius:var(--r-lg); padding:16px; display:flex; flex-direction:column; gap:14px; margin-top:12px; }
+.ipb .subrog-head{ display:flex; align-items:flex-start; justify-content:space-between; gap:10px; flex-wrap:wrap; }
+.ipb .subrog-status-pill{ font-family:var(--mono); font-size:9px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; padding:4px 9px; border-radius:99px; background:var(--pos-soft); color:var(--pos); border:1px solid rgba(47,214,163,.3); }
+.ipb .subrog-status-pill.orig{ background:var(--indigo-soft); color:var(--indigo); border-color:rgba(139,139,255,.3); }
+.ipb .subrog-hero-banner{ display:grid; grid-template-columns:1fr auto 1fr 1fr; align-items:center; gap:12px; padding:12px 14px; background:var(--panel); border:1px solid var(--border); border-left:3px solid var(--pos); border-radius:var(--r-sm); }
+.ipb .subrog-hero-banner .shb-col{ display:flex; flex-direction:column; gap:3px; min-width:0; }
+.ipb .subrog-hero-banner .shb-col.sav{ padding-left:12px; border-left:1px dashed var(--border-2); }
+.ipb .subrog-hero-banner .shb-lbl{ font-family:var(--mono); font-size:8.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--faint); }
+.ipb .subrog-hero-banner .shb-val{ font-family:var(--mono); font-size:14.5px; font-weight:700; color:var(--text); }
+.ipb .subrog-hero-banner .shb-val.dim{ color:var(--dim); }
+.ipb .subrog-hero-banner .shb-val.indigo{ color:var(--indigo); }
+.ipb .subrog-hero-banner .shb-val.pos{ color:var(--pos); }
+.ipb .subrog-hero-banner .shb-val.neg{ color:var(--neg); }
+.ipb .subrog-hero-banner .shb-sub{ font-family:var(--mono); font-size:10px; color:var(--dim); }
+.ipb .subrog-hero-banner .shb-arrow{ font-family:var(--mono); font-size:14px; color:var(--faint); display:flex; align-items:center; justify-content:center; }
+.ipb .subrog-timeline{ display:flex; flex-direction:column; gap:10px; }
+.ipb .subrog-card{ background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:12px 14px; display:flex; flex-direction:column; gap:10px; transition:border-color .15s; }
+.ipb .subrog-card.current,.ipb .subrog-card.active{ border-color:var(--indigo); box-shadow:0 0 0 1px var(--indigo-soft); }
+.ipb .subrog-card .sc-top{ display:flex; align-items:flex-start; justify-content:space-between; gap:10px; flex-wrap:wrap; }
+.ipb .subrog-card .sc-title,.ipb .subrog-card .sc-left{ display:flex; align-items:flex-start; gap:10px; min-width:0; }
+.ipb .subrog-card .sc-step{ width:26px; height:26px; border-radius:7px; background:var(--inset); border:1px solid var(--border); color:var(--dim); font-family:var(--mono); font-size:10px; font-weight:700; display:grid; place-items:center; flex:none; margin-top:1px; }
+.ipb .subrog-card .sc-step.indigo{ background:var(--indigo-soft); border-color:transparent; color:var(--indigo); }
+.ipb .subrog-card .sc-bank{ font-size:13px; font-weight:700; display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+.ipb .subrog-card .sc-ratetype{ font-family:var(--mono); font-size:8.5px; font-weight:600; text-transform:uppercase; padding:2px 6px; border-radius:4px; background:var(--inset); border:1px solid var(--border); color:var(--dim); }
+.ipb .subrog-card .sc-date{ font-family:var(--mono); font-size:10px; color:var(--dim); margin-top:3px; line-height:1.4; }
+.ipb .subrog-card .sc-right{ display:flex; align-items:center; gap:8px; flex-shrink:0; }
+.ipb .subrog-card .sc-pay{ font-family:var(--mono); font-size:14px; font-weight:700; color:var(--text); }
+.ipb .subrog-card .sc-pay.indigo{ color:var(--indigo); }
+.ipb .subrog-card .sc-pay small{ font-size:10px; font-weight:500; color:var(--faint); margin-left:2px; }
+.ipb .subrog-card .sc-badge{ font-family:var(--mono); font-size:8.5px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; padding:3px 7px; border-radius:5px; }
+.ipb .subrog-card .sc-badge.b-act,.ipb .subrog-card .sc-badge.act{ background:var(--pos-soft); color:var(--pos); }
+.ipb .subrog-card .sc-badge.b-up,.ipb .subrog-card .sc-badge.fut{ background:var(--warn-soft); color:var(--warn); }
+.ipb .subrog-card .sc-badge.b-hist{ background:var(--inset); color:var(--faint); border:1px solid var(--border); }
+.ipb .subrog-card .sc-metrics,.ipb .subrog-card .sc-grid{ display:grid; grid-template-columns:repeat(4,1fr); gap:8px; padding-top:9px; border-top:1px dashed var(--border-2); }
+.ipb .subrog-card .scm-box,.ipb .subrog-card .sc-cell{ display:flex; flex-direction:column; gap:2px; background:var(--inset); border:1px solid var(--border); border-radius:7px; padding:7px 9px; }
+.ipb .subrog-card .scm-l,.ipb .subrog-card .sc-lbl{ font-family:var(--mono); font-size:8px; letter-spacing:.08em; text-transform:uppercase; color:var(--faint); }
+.ipb .subrog-card .scm-v,.ipb .subrog-card .sc-val{ font-family:var(--mono); font-size:11.5px; font-weight:600; color:var(--text); }
+.ipb .subrog-card .scm-v.dim{ color:var(--dim); }
+.ipb .subrog-card .scm-v.pos,.ipb .subrog-card .sc-val.pos{ color:var(--pos); }
+.ipb .subrog-card .scm-v.neg,.ipb .subrog-card .sc-val.neg{ color:var(--neg); }
+.ipb .subrog-card .sc-foot{ display:flex; align-items:center; justify-content:space-between; gap:10px; padding-top:8px; border-top:1px solid var(--border); flex-wrap:wrap; }
+.ipb .subrog-card .sc-notes{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; font-size:11px; color:var(--dim); }
+.ipb .subrog-card .sc-att{ display:inline-flex; align-items:center; gap:5px; font-family:var(--mono); font-size:10px; font-weight:600; color:var(--accent); background:var(--accent-soft); padding:3px 8px; border-radius:6px; text-decoration:none; }
+.ipb .subrog-card .sc-att:hover{ filter:brightness(1.1); }
+.ipb .subrog-card .sc-actions{ display:flex; align-items:center; gap:6px; margin-left:auto; }
+.ipb .sc-btn{ border:1px solid var(--border); background:var(--inset); color:var(--dim); font-family:var(--mono); font-size:9.5px; font-weight:600; padding:5px 9px; border-radius:6px; cursor:pointer; display:inline-flex; align-items:center; gap:5px; transition:all .15s; }
+.ipb .sc-btn:hover{ color:var(--text); border-color:var(--border-2); }
+.ipb .sc-btn.edit:hover{ color:var(--indigo); border-color:var(--indigo); background:var(--indigo-soft); }
+.ipb .sc-btn.del:hover{ color:var(--neg); border-color:var(--neg); background:var(--neg-soft); }
+.ipb .subrog-form{ background:var(--panel); border:1px dashed var(--border-2); border-radius:10px; padding:14px; display:flex; flex-direction:column; gap:10px; }
+.ipb .subrog-form .sf-head{ display:flex; align-items:center; justify-content:space-between; gap:8px; font-family:var(--mono); font-size:10.5px; font-weight:700; text-transform:uppercase; letter-spacing:.08em; color:var(--indigo); margin-bottom:2px; }
+.ipb .subrog-file-btn{ display:flex; align-items:center; justify-content:center; gap:6px; width:100%; height:42px; background:var(--inset); border:1px dashed var(--border-2); border-radius:10px; font-family:var(--mono); font-size:11px; font-weight:600; color:var(--dim); cursor:pointer; padding:0 10px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.ipb .subrog-file-btn:hover{ border-color:var(--accent); color:var(--accent); }
+
 /* economica */
 .ipb .econgrid{ display:grid; grid-template-columns:1.7fr 1fr; gap:18px; align-items:start; }
 .ipb .econside{ display:flex; flex-direction:column; gap:18px; }
@@ -1490,6 +2626,7 @@ const IPB_CSS = `
 
 /* modal */
 .ipb-modal{ padding:0; border:none; border-radius:var(--r-lg); width:100%; max-width:440px; background:var(--panel); color:var(--text); box-shadow:0 40px 120px -30px rgba(0,0,0,.8); }
+.ipb-modal.radar-wide-modal{ max-width:960px; }
 .ipb-modal::backdrop{ background:rgba(4,7,14,.6); backdrop-filter:blur(3px); }
 .ipb-modal .mhead{ display:flex; align-items:center; justify-content:space-between; padding:20px 22px; border-bottom:1px solid var(--border); }
 .ipb-modal .mhead h3{ margin:0; font-size:16px; font-weight:700; } .ipb-modal .mhead p{ margin:3px 0 0; font-size:11px; color:var(--faint); }
@@ -1497,13 +2634,82 @@ const IPB_CSS = `
 .ipb-modal .mclose:hover{ color:var(--neg); border-color:var(--neg); }
 .ipb-modal .mbody{ padding:22px; display:grid; gap:14px; }
 
+/* radar tassi banche & surroghe */
+.ipb .radar-open-btn{ background:var(--indigo-soft); color:var(--indigo); border:1px solid rgba(139,139,255,.35); }
+.ipb .radar-open-btn:hover{ background:var(--indigo); color:#fff; }
+.ipb .radar-count-pill{ background:var(--pos); color:#052e16; font-family:var(--mono); font-size:10px; font-weight:800; padding:2px 6px; border-radius:99px; }
+.ipb .radar-portfolio-banner{ display:flex; align-items:center; justify-content:space-between; gap:16px; padding:14px 18px; background:var(--panel); border:1px solid var(--border-2); border-left:4px solid var(--indigo); border-radius:var(--r); flex-wrap:wrap; }
+.ipb .radar-portfolio-banner.has-adv{ border-left-color:var(--pos); background:linear-gradient(90deg,var(--pos-soft),var(--panel)); }
+.ipb .radar-portfolio-banner .rpb-left{ display:flex; align-items:center; gap:12px; min-width:0; }
+.ipb .radar-portfolio-banner .rpb-icon{ font-size:22px; }
+.ipb .radar-portfolio-banner .rpb-title{ font-size:13px; font-weight:700; color:var(--text); }
+.ipb .radar-portfolio-banner .rpb-desc{ font-family:var(--mono); font-size:11px; color:var(--dim); margin-top:3px; }
+.ipb .radar-portfolio-banner .rpb-actions{ display:flex; gap:8px; flex-wrap:wrap; }
+.ipb .mort-adv-tag{ margin-top:8px; padding:5px 8px; border-radius:6px; background:var(--pos-soft); color:var(--pos); font-family:var(--mono); font-size:9.5px; border:1px solid rgba(47,214,163,.25); }
+
+.ipb .radar-box{ background:var(--panel); border:1px solid var(--border-2); border-radius:12px; padding:15px; display:flex; flex-direction:column; gap:12px; }
+.ipb .radar-head{ display:flex; align-items:flex-start; justify-content:space-between; gap:12px; flex-wrap:wrap; }
+.ipb .radar-title-row{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.ipb .radar-badge-live{ font-family:var(--mono); font-size:9.5px; font-weight:700; letter-spacing:.08em; padding:3px 8px; border-radius:6px; background:var(--accent-soft); color:var(--accent); }
+.ipb .radar-badge-hot{ font-family:var(--mono); font-size:9.5px; font-weight:700; letter-spacing:.06em; padding:3px 8px; border-radius:6px; background:var(--pos-soft); color:var(--pos); border:1px solid rgba(47,214,163,.35); }
+.ipb .radar-sub{ font-size:11px; color:var(--dim); margin-top:4px; line-height:1.4; }
+.ipb .radar-actions{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.ipb .sc-btn.tg-btn{ background:rgba(14,165,233,.14); color:#38bdf8; border-color:rgba(56,189,248,.35); }
+.ipb .sc-btn.tg-btn:hover{ background:#0284c7; color:#fff; border-color:#0284c7; }
+.ipb .radar-indices-strip{ display:flex; align-items:center; gap:12px; flex-wrap:wrap; padding:8px 12px; background:var(--inset); border:1px solid var(--border); border-radius:8px; font-family:var(--mono); font-size:10.5px; color:var(--dim); }
+.ipb .radar-indices-strip strong{ color:var(--text); }
+.ipb .radar-feedback{ display:flex; align-items:center; justify-content:space-between; gap:10px; padding:9px 12px; border-radius:8px; font-size:11.5px; font-weight:600; }
+.ipb .radar-feedback.success{ background:var(--pos-soft); color:var(--pos); border:1px solid rgba(47,214,163,.35); }
+.ipb .radar-feedback.error{ background:var(--neg-soft); color:var(--neg); border:1px solid rgba(251,111,134,.35); }
+.ipb .radar-feedback.info{ background:var(--accent-soft); color:var(--accent); border:1px solid rgba(47,143,255,.35); }
+.ipb .radar-feedback button{ background:transparent; border:none; color:inherit; cursor:pointer; font-weight:700; }
+
+.ipb .radar-best-callout{ display:flex; align-items:center; justify-content:space-between; gap:14px; padding:12px 14px; border-radius:10px; background:var(--inset); border:1px solid var(--border-2); flex-wrap:wrap; }
+.ipb .radar-best-callout.adv{ border-left:4px solid var(--pos); background:linear-gradient(90deg,var(--pos-soft),var(--inset)); }
+.ipb .radar-best-callout .rbc-eyebrow{ font-family:var(--mono); font-size:9px; font-weight:700; letter-spacing:.1em; color:var(--pos); text-transform:uppercase; }
+.ipb .radar-best-callout .rbc-main{ font-size:13px; color:var(--text); margin-top:3px; }
+.ipb .radar-best-callout .rbc-city{ font-size:11px; color:var(--dim); }
+.ipb .radar-best-callout .rbc-metrics{ font-family:var(--mono); font-size:11px; color:var(--dim); margin-top:4px; display:flex; gap:8px; flex-wrap:wrap; }
+.ipb .radar-best-callout .rbc-metrics .pos{ color:var(--pos); }
+.ipb .radar-best-callout .rbc-right{ display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+.ipb .radar-best-callout .rbc-sav-box{ display:flex; flex-direction:column; align-items:flex-end; font-family:var(--mono); }
+.ipb .radar-best-callout .rbc-sav-lbl{ font-size:8.5px; text-transform:uppercase; color:var(--faint); }
+.ipb .radar-best-callout .rbc-sav-val{ font-size:13.5px; font-weight:700; color:var(--pos); }
+.ipb .radar-best-callout .rbc-sav-tot{ font-size:10px; color:var(--dim); }
+
+.ipb .radar-filter-bar{ display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; }
+.ipb .rf-pills{ display:flex; gap:6px; flex-wrap:wrap; }
+.ipb .rf-pill{ border:1px solid var(--border); background:var(--inset); color:var(--dim); font-family:var(--mono); font-size:10px; font-weight:600; padding:5px 10px; border-radius:7px; cursor:pointer; }
+.ipb .rf-pill.on{ background:var(--accent); color:#fff; border-color:transparent; }
+.ipb .rf-threshold-note{ font-family:var(--mono); font-size:10px; color:var(--dim); }
+
+.ipb .radar-table-wrap{ overflow-x:auto; border:1px solid var(--border); border-radius:9px; background:var(--inset); }
+.ipb .radar-table{ width:100%; border-collapse:collapse; font-size:11.5px; text-align:left; }
+.ipb .radar-table th{ font-family:var(--mono); font-size:9px; font-weight:700; text-transform:uppercase; letter-spacing:.08em; color:var(--faint); padding:9px 10px; border-bottom:1px solid var(--border-2); background:var(--panel); white-space:nowrap; }
+.ipb .radar-table td{ padding:9px 10px; border-bottom:1px solid var(--border); vertical-align:middle; }
+.ipb .radar-table tr:last-child td{ border-bottom:none; }
+.ipb .radar-table tr.row-adv{ background:rgba(47,214,163,.05); }
+.ipb .radar-table .rt-bank{ display:flex; align-items:center; gap:6px; flex-wrap:wrap; font-size:12px; }
+.ipb .radar-table .rt-prod{ display:flex; align-items:center; gap:6px; flex-wrap:wrap; font-weight:600; }
+.ipb .radar-table .rt-sub{ font-size:10px; color:var(--dim); margin-top:2px; }
+.ipb .radar-table .rt-sub-inline{ font-size:10px; color:var(--dim); }
+.ipb .radar-table .rt-mono{ font-family:var(--mono); font-size:12px; }
+.ipb .radar-table .rt-mono.pos,.ipb .radar-table .rt-delta.pos{ color:var(--pos); }
+.ipb .radar-table .rt-mono.neg,.ipb .radar-table .rt-delta.neg{ color:var(--neg); }
+.ipb .radar-table .rt-delta{ font-family:var(--mono); font-size:10px; margin-top:2px; }
+.ipb .rt-tag{ font-family:var(--mono); font-size:8.5px; font-weight:700; padding:2px 5px; border-radius:4px; text-transform:uppercase; }
+.ipb .rt-tag.milan{ background:var(--indigo-soft); color:var(--indigo); }
+.ipb .rt-tag.green{ background:var(--pos-soft); color:var(--pos); }
+.ipb .rt-tag.adv-pill{ display:inline-block; margin-top:2px; background:var(--pos-soft); color:var(--pos); }
+.ipb .radar-config-bar{ display:grid; grid-template-columns:repeat(4,1fr); gap:10px; padding:12px; background:var(--inset); border:1px solid var(--border); border-radius:10px; }
+
 @media (max-width:1100px){
   .ipb .kpis,.ipb .cards{ grid-template-columns:repeat(2,1fr); }
   .ipb .econgrid,.ipb .anbody,.ipb .split{ grid-template-columns:1fr; }
-  .ipb .addcost .adgrid{ grid-template-columns:repeat(2,1fr); }
+  .ipb .addcost .adgrid,.ipb .radar-config-bar{ grid-template-columns:repeat(2,1fr); }
 }
 @media (max-width:640px){
-  .ipb .kpis,.ipb .cards,.ipb .grid2,.ipb .grid3{ grid-template-columns:1fr; }
+  .ipb .kpis,.ipb .cards,.ipb .grid2,.ipb .grid3,.ipb .subrog-hero-banner,.ipb .subrog-card .sc-grid,.ipb .subrog-card .sc-metrics,.ipb .radar-config-bar{ grid-template-columns:1fr; }
   .ipb .phead{ flex-direction:column; align-items:stretch; }
 }
 `;

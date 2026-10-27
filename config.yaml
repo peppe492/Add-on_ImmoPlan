@@ -1,8 +1,8 @@
 
 name: "MM's PROPERTY Manager"
-version: "1.5.2"
+version: "1.6.0"
 slug: "mm_property_manager"
-description: "Gestione avanzata costi immobiliari, ristrutturazioni e affitti con AI Gemini, Archivio Detrazioni Fiscali 730, Calendario Scadenze e supporto mappe."
+description: "Gestione avanzata costi immobiliari, ristrutturazioni, affitti, Surroghe Mutuo con Radar Banche (Italia/Milano) & Telegram, Detrazioni 730 e AI Gemini."
 url: "https://github.com/peppe492/Add-on_ImmoPlan"
 arch:
   - aarch64

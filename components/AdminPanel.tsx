@@ -3,6 +3,7 @@ import { db } from '../services/dbService';
 import { SystemLog, CustomSensor, Property, FinancialData, Scenario, NotificationSettings } from '../types';
 import { fetchIstatIndexes, getMicroMarketMetrics } from '../services/openDataService';
 import { notificationService, DEFAULT_NOTIFICATION_SETTINGS } from '../services/notificationService';
+import { runMortgageRadarCheck, DEFAULT_MORTGAGE_RADAR_SETTINGS } from '../services/mortgageService';
 
 /* =====================================================================================
    ImmoPlan · Admin — Bento Cyber Design (v2 Refined)
@@ -96,6 +97,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [isTestingTg, setIsTestingTg] = useState(false);
   const [tgTestFeedback, setTgTestFeedback] = useState<{ success: boolean; message: string } | null>(null);
   const [showTgToken, setShowTgToken] = useState(false);
+  const [isRunningRadarTest, setIsRunningRadarTest] = useState(false);
+  const [radarTestFeedback, setRadarTestFeedback] = useState<{ success: boolean; message: string } | null>(null);
 
   const terminalBodyRef = useRef<HTMLDivElement>(null);
 
@@ -367,6 +370,46 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       setTgTestFeedback({ success: false, message: e.message });
     } finally {
       setIsTestingTg(false);
+    }
+  };
+
+  const handleRunAdminMortgageRadar = async (sendTg: boolean) => {
+    setIsRunningRadarTest(true);
+    setRadarTestFeedback(null);
+    try {
+      await notificationService.saveSettings(notifSettings);
+      const radarCfg = notifSettings.mortgageRadar || DEFAULT_MORTGAGE_RADAR_SETTINGS;
+      const report = await runMortgageRadarCheck({
+        properties,
+        sendTelegram: sendTg,
+        forceSend: sendTg,
+        botToken: notifSettings.telegram.botToken,
+        recipientChatId: radarCfg.recipientChatId || notifSettings.telegram.ownerChatId,
+        settings: radarCfg
+      });
+      if (sendTg) {
+        if (report.telegramSent) {
+          setRadarTestFeedback({
+            success: true,
+            message: `Report Telegram inviato! ${report.advantageousCount} mutui con surroga vantaggiosa (risparmio max € ${report.totalPotentialAnnualSavings.toFixed(0)}/anno).`
+          });
+        } else {
+          setRadarTestFeedback({
+            success: false,
+            message: report.telegramError || 'Controlla la configurazione Bot Token e Chat ID Telegram.'
+          });
+        }
+      } else {
+        setRadarTestFeedback({
+          success: true,
+          message: `Analisi completata: ${report.propertiesAnalyzedCount} mutui attivi, ${report.advantageousCount} opportunità di surroga trovate (risparmio potenziale € ${report.totalPotentialMonthlySavings.toFixed(2)}/mese).`
+        });
+      }
+      db.log(`[Admin] Radar Tassi Mutui eseguito: ${report.advantageousCount}/${report.propertiesAnalyzedCount} surroghe vantaggiose`, 'success');
+    } catch (e: any) {
+      setRadarTestFeedback({ success: false, message: e?.message || 'Errore controllo Radar Mutui' });
+    } finally {
+      setIsRunningRadarTest(false);
     }
   };
 
@@ -941,6 +984,152 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   <span>{isTestingTg ? 'Verifica Telegram…' : 'Testa Bot Telegram'}</span>
                 </button>
               
+              </div>
+
+              {/* RADAR TASSI MUTUI & SURROGHE (BANCHE ITALIA & MILANO) */}
+              <div className="bg-slate-900/50 p-5 rounded-2xl border border-slate-800 space-y-4 md:col-span-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 text-emerald-400 font-bold text-sm">
+                    <span>📡</span>
+                    <span>Radar Tassi Mutui &amp; Surroghe (Banche Italia &amp; Milano)</span>
+                  </div>
+                  <div className="flex items-center gap-4">
+                    <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={(notifSettings.mortgageRadar || DEFAULT_MORTGAGE_RADAR_SETTINGS).enabled}
+                        onChange={e => setNotifSettings({
+                          ...notifSettings,
+                          mortgageRadar: {
+                            ...(notifSettings.mortgageRadar || DEFAULT_MORTGAGE_RADAR_SETTINGS),
+                            enabled: e.target.checked
+                          }
+                        })}
+                        className="w-4 h-4 rounded text-emerald-500 cursor-pointer"
+                      />
+                      <span>Radar Attivo</span>
+                    </label>
+                    <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={(notifSettings.mortgageRadar || DEFAULT_MORTGAGE_RADAR_SETTINGS).autoTelegramAlert}
+                        onChange={e => setNotifSettings({
+                          ...notifSettings,
+                          mortgageRadar: {
+                            ...(notifSettings.mortgageRadar || DEFAULT_MORTGAGE_RADAR_SETTINGS),
+                            autoTelegramAlert: e.target.checked
+                          }
+                        })}
+                        className="w-4 h-4 rounded text-sky-500 cursor-pointer"
+                      />
+                      <span>Report Automatico Telegram</span>
+                    </label>
+                  </div>
+                </div>
+
+                <p className="text-[11px] text-slate-400">
+                  Monitora automaticamente i tassi mutuo (TAN/TAEG, IRS/Euribor) delle principali banche italiane e della piazza di Milano (Banco BPM Milano, Webank, Mediobanca Premier, Intesa Sanpaolo, UniCredit, Crédit Agricole, ING, Fineco, BNL, BPER, Popolare di Sondrio, Credem, Banca Sella) e invia un report su Telegram quando una surroga supera le soglie di convenienza.
+                </p>
+
+                <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
+                  <div className="ipb-field">
+                    <label>Risparmio Minimo Rata (€/mese)</label>
+                    <input
+                      type="number"
+                      min="0"
+                      max="1000"
+                      step="5"
+                      className="ipb-input mono"
+                      value={(notifSettings.mortgageRadar || DEFAULT_MORTGAGE_RADAR_SETTINGS).minMonthlySavings}
+                      onChange={e => setNotifSettings({
+                        ...notifSettings,
+                        mortgageRadar: {
+                          ...(notifSettings.mortgageRadar || DEFAULT_MORTGAGE_RADAR_SETTINGS),
+                          minMonthlySavings: Math.max(0, isNaN(parseFloat(e.target.value)) ? 0 : parseFloat(e.target.value))
+                        }
+                      })}
+                    />
+                  </div>
+                  <div className="ipb-field">
+                    <label>Delta Tasso Minimo (bps)</label>
+                    <input
+                      type="number"
+                      min="0"
+                      max="300"
+                      step="5"
+                      className="ipb-input mono"
+                      value={(notifSettings.mortgageRadar || DEFAULT_MORTGAGE_RADAR_SETTINGS).minRateDeltaBps}
+                      onChange={e => setNotifSettings({
+                        ...notifSettings,
+                        mortgageRadar: {
+                          ...(notifSettings.mortgageRadar || DEFAULT_MORTGAGE_RADAR_SETTINGS),
+                          minRateDeltaBps: Math.max(0, isNaN(parseInt(e.target.value, 10)) ? 0 : parseInt(e.target.value, 10))
+                        }
+                      })}
+                    />
+                  </div>
+                  <div className="ipb-field">
+                    <label>Preferenza Tipo Tasso</label>
+                    <select
+                      className="ipb-input"
+                      value={(notifSettings.mortgageRadar || DEFAULT_MORTGAGE_RADAR_SETTINGS).preferredRateType}
+                      onChange={e => setNotifSettings({
+                        ...notifSettings,
+                        mortgageRadar: {
+                          ...(notifSettings.mortgageRadar || DEFAULT_MORTGAGE_RADAR_SETTINGS),
+                          preferredRateType: e.target.value as 'ALL' | 'FIXED' | 'VARIABLE'
+                        }
+                      })}
+                    >
+                      <option value="ALL">Fisso + Variabile (Migliore Assoluto)</option>
+                      <option value="FIXED">Solo Tasso Fisso (IRS)</option>
+                      <option value="VARIABLE">Solo Tasso Variabile (Euribor)</option>
+                    </select>
+                  </div>
+                  <div className="ipb-field">
+                    <label>Chat ID Destinatario (Opz.)</label>
+                    <input
+                      type="text"
+                      placeholder="Default: Chat ID Proprietario"
+                      className="ipb-input mono"
+                      value={(notifSettings.mortgageRadar || DEFAULT_MORTGAGE_RADAR_SETTINGS).recipientChatId || ''}
+                      onChange={e => setNotifSettings({
+                        ...notifSettings,
+                        mortgageRadar: {
+                          ...(notifSettings.mortgageRadar || DEFAULT_MORTGAGE_RADAR_SETTINGS),
+                          recipientChatId: e.target.value || undefined
+                        }
+                      })}
+                    />
+                  </div>
+                </div>
+
+                {radarTestFeedback && (
+                  <div className={`p-2.5 rounded-xl border text-xs ${radarTestFeedback.success ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300' : 'bg-rose-500/10 border-rose-500/30 text-rose-300'}`}>
+                    {radarTestFeedback.message}
+                  </div>
+                )}
+
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => handleRunAdminMortgageRadar(false)}
+                    disabled={isRunningRadarTest}
+                    className="flex-1 py-2 bg-slate-800 hover:bg-slate-700 text-emerald-300 border border-slate-700 rounded-xl text-xs font-bold transition flex items-center justify-center gap-2"
+                  >
+                    <span>{isRunningRadarTest ? '⏳' : '🔍'}</span>
+                    <span>Analizza Tassi Mutui Ora</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleRunAdminMortgageRadar(true)}
+                    disabled={isRunningRadarTest}
+                    className="flex-1 py-2 bg-sky-600/20 hover:bg-sky-600/30 text-sky-300 border border-sky-500/40 rounded-xl text-xs font-bold transition flex items-center justify-center gap-2"
+                  >
+                    <span>{isRunningRadarTest ? '⏳' : '✈️'}</span>
+                    <span>Analizza &amp; Invia Report su Telegram</span>
+                  </button>
+                </div>
               </div>
 
             </div>

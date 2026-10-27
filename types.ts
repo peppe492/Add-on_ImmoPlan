@@ -215,6 +215,19 @@ export interface PropertyForecastData {
   lastSimulatedAt: string;
 }
 
+export interface MortgageSubrogation {
+  id: string;
+  date: string; // YYYY-MM-DD start of the new conditions
+  bankName?: string;
+  newMonthlyPayment: number;
+  newRate?: number;
+  rateType?: 'FIXED' | 'VARIABLE';
+  newDurationYears: number;
+  residualPrincipal?: number;
+  notes?: string;
+  attachment?: Attachment;
+}
+
 export interface Property {
   id: string;
   name: string;
@@ -233,6 +246,8 @@ export interface Property {
     mortgageDuration?: number;
     mortgageStartDate?: string;
     mortgageRate?: number;
+    originalBankName?: string;
+    subrogations?: MortgageSubrogation[];
     monthlyRent?: number;
     condoFees: number;
     defaultTaxRate: number;
@@ -242,6 +257,8 @@ export interface Property {
     marginalTaxRate?: number;
     rentDueDay?: number;
   };
+  subrogations?: MortgageSubrogation[];
+  mortgageSubrogations?: MortgageSubrogation[];
   rentDueDay?: number;
   recurringCosts?: RecurringCost[];
   currentTenantId?: string; 
@@ -423,6 +440,103 @@ export interface RentReceipt {
   createdAt: string; // ISO timestamp
 }
 
+export interface MortgageRadarSettings {
+  enabled: boolean; // Default: true
+  autoTelegramAlert: boolean; // Default: true
+  minMonthlySavings: number; // Default: 30 (€/mese)
+  minRateDeltaBps: number; // Default: 25 (0.25% / 25 bps)
+  preferredRateType: 'ALL' | 'FIXED' | 'VARIABLE'; // Default: 'ALL'
+  checkIntervalHours: number; // Default: 24
+  recipientChatId?: string; // Optional override, defaults to telegram.ownerChatId
+  lastCheckAt?: string;
+  lastAlertSentAt?: string;
+}
+
+export interface BankMortgageOffer {
+  bankId: string;
+  bankName: string;
+  hqCity: string;
+  isMilanFocused: boolean;
+  productName: string;
+  rateType: 'FIXED' | 'VARIABLE';
+  referenceIndex: string;
+  referenceIndexRate: number;
+  spread: number;
+  tan: number;
+  taeg: number;
+  greenTan?: number;
+  maxLtv: number;
+  zeroExpensesSubrogation: boolean;
+  periziaGratuita: boolean;
+  istruttoriaGratuita: boolean;
+  notes?: string;
+  updatedAt: string;
+}
+
+export interface MarketReferenceIndices {
+  irs10Y: number;
+  irs15Y: number;
+  irs20Y: number;
+  irs25Y: number;
+  irs30Y: number;
+  euribor1M: number;
+  euribor3M: number;
+  bceRate: number;
+  source: 'LIVE_ECB_EURIBOR' | 'GEMINI_GROUNDED' | 'REFERENCE_BENCHMARK';
+  updatedAt: string;
+}
+
+export interface EvaluatedBankOffer {
+  offer: BankMortgageOffer;
+  appliedTan: number;
+  appliedTaeg: number;
+  isGreenRateApplied: boolean;
+  newMonthlyPayment: number;
+  monthlySavings: number;
+  annualSavings: number;
+  totalRemainingSavings: number;
+  rateDelta: number;
+  rateDeltaBps: number;
+  isAdvantageous: boolean;
+}
+
+export interface PropertySubrogationOpportunity {
+  propertyId: string;
+  propertyName: string;
+  propertyAddress?: string;
+  energyClass?: string;
+  isGreenProperty: boolean;
+  currentBankName: string;
+  currentRate: number;
+  currentRateType: 'FIXED' | 'VARIABLE';
+  currentMonthlyPayment: number;
+  remainingYears: number;
+  remainingMonths: number;
+  estimatedResidualPrincipal: number;
+  propertyValue: number;
+  estimatedLtv: number;
+  bestOffer: EvaluatedBankOffer | null;
+  topOffers: EvaluatedBankOffer[];
+  isAdvantageous: boolean;
+  advantageReason?: string;
+}
+
+export interface MortgageRadarReport {
+  generatedAt: string;
+  indices: MarketReferenceIndices;
+  banksMonitoredCount: number;
+  propertiesAnalyzedCount: number;
+  advantageousCount: number;
+  totalPotentialMonthlySavings: number;
+  totalPotentialAnnualSavings: number;
+  totalPotentialRemainingSavings: number;
+  opportunities: PropertySubrogationOpportunity[];
+  bankCatalog: BankMortgageOffer[];
+  telegramSent?: boolean;
+  telegramMessage?: string;
+  telegramError?: string;
+}
+
 export interface NotificationSettings {
   reminderAdvanceDays: number; // Default: 5
   autoCheckEnabled: boolean; // Default: true
@@ -440,13 +554,14 @@ export interface NotificationSettings {
     notifyTenantOnDue: boolean;
     autoSendReceiptToTenant: boolean;
   };
+  mortgageRadar?: MortgageRadarSettings;
 }
 
 export interface NotificationLog {
   id: string;
   timestamp: string; // ISO timestamp
   channel: 'TELEGRAM' | 'HOME_ASSISTANT';
-  type: 'REMINDER_UPCOMING' | 'REMINDER_OVERDUE' | 'RECEIPT_SENT' | 'TEST';
+  type: 'REMINDER_UPCOMING' | 'REMINDER_OVERDUE' | 'RECEIPT_SENT' | 'MORTGAGE_RADAR_ALERT' | 'TEST';
   recipient: string;
   propertyId?: string;
   propertyName?: string;
@@ -454,4 +569,5 @@ export interface NotificationLog {
   status: 'SUCCESS' | 'FAILED';
   details?: string;
 }
+
 

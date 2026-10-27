@@ -1,6 +1,7 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { Property, ForecastSimulationConfig, PropertyForecastData, InvoiceRecord } from '../types';
 import { calculatePropertyForecast, getDefaultSimulationConfig } from '../services/forecastService';
+import { getLatestOrActiveMortgage } from '../services/mortgageService';
 import { getMicroMarketMetrics } from '../services/openDataService';
 import { db } from '../services/dbService';
 import { getAnnualDeductionsByProperty, getDeductionSummaryForProperty } from '../services/taxDeductionService';
@@ -130,6 +131,8 @@ export const MarketForecaster: React.FC<MarketForecasterProps> = ({ property, on
   const gain5y = y5 ? y5.propertyValue - initialVal : 0;
   const etfDiff10y = y10 ? (y10.accumulatedEquity + (y10.cumulativeNetCashFlow || 0)) - y10.etfWorldBenchmarkValue : 0;
 
+  const activeMortgageState = useMemo(() => getLatestOrActiveMortgage(property), [property]);
+
   const chartData = projections.map(p => ({
     year: `Anno ${p.year}`,
     yearNum: p.year,
@@ -151,7 +154,14 @@ export const MarketForecaster: React.FC<MarketForecasterProps> = ({ property, on
         <div>
           <div className="mf-eyebrow">Modulo 5 · Motore Previsionale Finanziario</div>
           <h2 className="mf-title">Trend Prezzi &amp; Simulazione Mercato (1-10 Anni)</h2>
-          <p className="mf-sub">Analisi deterministica, impatto Direttiva UE Case Verdi e benchmark competitivo ETF World</p>
+          <p className="mf-sub">
+            Analisi deterministica, impatto Direttiva UE Case Verdi e benchmark competitivo ETF World
+            {activeMortgageState.isSubrogated && (
+              <span style={{ marginLeft: 10, padding: '2px 8px', borderRadius: 6, background: 'rgba(139, 139, 255, 0.16)', color: '#a5b4fc', fontSize: 11, fontFamily: 'var(--mono)', fontWeight: 600 }}>
+                🔄 Surroga #{activeMortgageState.subrogationIndex} attiva{activeMortgageState.bankName ? ` (${activeMortgageState.bankName})` : ''}: {eur(activeMortgageState.configuredMonthlyPayment)}/m · {activeMortgageState.rate}% · {activeMortgageState.durationYears}a
+              </span>
+            )}
+          </p>
         </div>
         <button className="mf-btn mf-btn-primary" onClick={handleSave}>
           💾 Salva Simulazione
@@ -176,7 +186,9 @@ export const MarketForecaster: React.FC<MarketForecasterProps> = ({ property, on
             <span className="mf-kpi-icon">🏠</span>
           </div>
           <div className="mf-kpi-val">{eur(y5?.accumulatedEquity || 0)}</div>
-          <div className="mf-kpi-sub">Debito residuo mutuo: <span className="mf-neg">{eur(y5?.remainingMortgageDebt || 0)}</span></div>
+          <div className="mf-kpi-sub">
+            Debito residuo{activeMortgageState.isSubrogated ? ' (surrogato)' : ''}: <span className="mf-neg">{eur(y5?.remainingMortgageDebt || 0)}</span>
+          </div>
         </div>
 
         <div className="mf-kpi-card">

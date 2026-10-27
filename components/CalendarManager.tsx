@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { db } from '../services/dbService';
 import { Deadline, Property, FinancialData, Scenario, CostDetail, RenovationItem, RecurringCost, RentalRecord } from '../types';
+import { getActiveMortgageAtDate, getPropertySubrogations } from '../services/mortgageService';
 
 // Helper per formattare una Date locale in YYYY-MM-DD senza shift di fuso orario UTC
 const toLocalDateStr = (d: Date): string => {
@@ -599,41 +600,51 @@ export const CalendarManager: React.FC = () => {
         }
       }
 
-      // 2D. Rata Mensile Mutuo
-      if (prop.financials && prop.financials.mortgageAmount && prop.financials.mortgageAmount > 0) {
+      // 2D. Rata Mensile Mutuo (Time-Aware con supporto Surroghe)
+      const propSubs = getPropertySubrogations(prop);
+      if (prop.financials && ((prop.financials.mortgageAmount && prop.financials.mortgageAmount > 0) || propSubs.length > 0)) {
         const hasExplicitMortgage = prop.recurringCosts?.some(c => c.category === 'MORTGAGE');
         if (!hasExplicitMortgage) {
-          const monthly = prop.financials.mortgageAmount;
-          const durationYears = prop.financials.mortgageDuration || 20;
-
-          let startYear = 2020;
-          let startMonth = 0;
-          let day = 1;
+          let fallbackStartStr = '2020-01-01';
+          let baseDay = 1;
 
           if (prop.financials.mortgageStartDate) {
+            fallbackStartStr = prop.financials.mortgageStartDate;
             const parts = prop.financials.mortgageStartDate.split('-');
             if (parts.length >= 3) {
-              startYear = parseInt(parts[0]) || 2020;
-              startMonth = (parseInt(parts[1]) || 1) - 1;
-              day = parseInt(parts[2]) || 1;
+              baseDay = parseInt(parts[2]) || 1;
             }
           } else if (prop.purchaseDate) {
+            fallbackStartStr = prop.purchaseDate;
             const parts = prop.purchaseDate.split('-');
             if (parts.length >= 3) {
-              startYear = parseInt(parts[0]) || 2020;
-              startMonth = (parseInt(parts[1]) || 1) - 1;
-              day = parseInt(parts[2]) || 1;
+              baseDay = parseInt(parts[2]) || 1;
             }
           }
 
-          const endYear = startYear + durationYears;
-          const endMonth = startMonth;
+          const effectiveProp: Property = {
+            ...prop,
+            financials: {
+              ...prop.financials,
+              mortgageStartDate: prop.financials.mortgageStartDate || fallbackStartStr
+            }
+          };
 
           monthsToGenerate.forEach(({ year, month }) => {
-            const isAfterStart = year > startYear || (year === startYear && month >= startMonth);
-            const isBeforeEnd = year < endYear || (year === endYear && month <= endMonth);
+            const activeMort = getActiveMortgageAtDate(
+              effectiveProp,
+              new Date(year, month, 1),
+              { monthGranularity: true }
+            );
 
-            if (isAfterStart && isBeforeEnd) {
+            if (activeMort.isActive && activeMort.monthlyPayment > 0) {
+              let day = baseDay;
+              if (activeMort.startDate) {
+                const sParts = activeMort.startDate.split('-');
+                if (sParts.length >= 3) {
+                  day = parseInt(sParts[2]) || baseDay;
+                }
+              }
               const maxDay = new Date(year, month + 1, 0).getDate();
               const actualDay = Math.min(day, maxDay);
               const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(actualDay).padStart(2, '0')}`;
@@ -641,15 +652,18 @@ export const CalendarManager: React.FC = () => {
 
               if (!generatedIds.has(id)) {
                 generatedIds.add(id);
+                const bankSuffix = activeMort.bankName ? ` (${activeMort.bankName})` : '';
                 auto.push({
                   id,
-                  title: `${prop.name}: Rata Mutuo`,
+                  title: `${prop.name}: Rata Mutuo${bankSuffix}`,
                   date: dateStr,
                   type: 'CONTRACT',
-                  amount: monthly,
+                  amount: activeMort.monthlyPayment,
                   isCompleted: false,
                   propertyId: prop.id,
-                  notes: 'Scadenza mensile da Scheda Economica (Mutuo)'
+                  notes: activeMort.isSubrogated
+                    ? `Scadenza mensile da Surroga Mutuo #${activeMort.subrogationIndex}${bankSuffix}`
+                    : 'Scadenza mensile da Scheda Economica (Mutuo)'
                 });
               }
             }
@@ -1094,11 +1108,19 @@ export const CalendarManager: React.FC = () => {
                 </span>
               </div>
               <div className="flex items-center gap-3 text-xs text-slate-500 dark:text-slate-400 mt-1 flex-wrap">
-                {selectedProperty.financials?.mortgageAmount ? (
-                  <span className="flex items-center gap-1 font-semibold text-blue-600 dark:text-blue-400">
-                    🏦 Mutuo: €{Math.round(selectedProperty.financials.mortgageAmount).toLocaleString('it-IT')}/m
-                  </span>
-                ) : null}
+                {(() => {
+                  const activeMort = getActiveMortgageAtDate(selectedProperty, currentDate, { monthGranularity: true });
+                  const mortAmt = activeMort.isActive ? activeMort.monthlyPayment : activeMort.configuredMonthlyPayment;
+                  if (mortAmt <= 0) return null;
+                  const mortLabel = activeMort.isSubrogated
+                    ? `Mutuo Surrogato${activeMort.bankName ? ` (${activeMort.bankName})` : ''}`
+                    : `Mutuo${activeMort.bankName ? ` (${activeMort.bankName})` : ''}`;
+                  return (
+                    <span className="flex items-center gap-1 font-semibold text-blue-600 dark:text-blue-400">
+                      🏦 {mortLabel}: €{Math.round(mortAmt).toLocaleString('it-IT')}/m
+                    </span>
+                  );
+                })()}
                 {selectedProperty.financials?.monthlyRent ? (
                   <span className="flex items-center gap-1 font-semibold text-emerald-600 dark:text-emerald-400">
                     🔑 Affitto: €{Math.round(selectedProperty.financials.monthlyRent).toLocaleString('it-IT')}/m
