@@ -2,6 +2,7 @@ import React, { useMemo, useState, useEffect } from 'react';
 import { CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, AreaChart, Area, Cell, PieChart, Pie, XAxis, YAxis, BarChart, Bar, Legend } from 'recharts';
 import { FinancialData, CostDetail, Portfolio, CostAssignment, RenovationItem } from '../types';
 import { SmartAssignmentModal } from './SmartAssignmentModal';
+import { useTheme } from '../context/ThemeContext';
 
 /* =====================================================================================
    ImmoPlan · Report Acquisto — "Bento Terminal" reskin. Logica 100% identica.
@@ -20,9 +21,7 @@ interface ModalConfig { isOpen: boolean; itemSource?: { type: 'purchase' | 'work
 
 export const Dashboard: React.FC<Props> = ({ data, onChange }) => {
   const [modalState, setModalState] = useState<ModalConfig>({ isOpen: false, totalCost: 0, currentAssignments: [] });
-  const [theme, setTheme] = useState<'DEFAULT' | 'NEON'>('DEFAULT');
-  useEffect(() => { const apply = () => setTheme(document.documentElement.classList.contains('theme-neon') ? 'NEON' : 'DEFAULT'); const obs = new MutationObserver(apply); obs.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] }); apply(); return () => obs.disconnect(); }, []);
-  const isNeon = theme === 'NEON';
+  const { theme, isNeon } = useTheme();
   const CH = isNeon
     ? { grid: 'rgba(255,255,255,.06)', axis: '#58637a', tip: '#151d2d', tipBorder: 'rgba(255,255,255,.12)', accent: '#6f63ff', accentSoft: '#2f8fff', cash: '#2fd6a3', immobile: '#4f46e5', reno: '#f5b942', gius: '#2f8fff', clau: '#fb6f86', flow: '#6f63ff' }
     : { grid: '#f1f5f9', axis: '#94a3b8', tip: '#ffffff', tipBorder: 'rgba(15,23,42,.08)', accent: '#6366f1', accentSoft: '#0a6cff', cash: '#0fa47a', immobile: '#4338ca', reno: '#f59e0b', gius: '#0ea5e9', clau: '#f43f5e', flow: '#6366f1' };

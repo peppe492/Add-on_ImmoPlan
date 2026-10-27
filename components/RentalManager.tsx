@@ -7,6 +7,7 @@ import { createRentReceipt } from '../services/receiptPdfService';
 import { notificationService } from '../services/notificationService';
 import { RentReceiptModal } from './RentReceiptModal';
 import { getActiveMortgageAtDate } from '../services/mortgageService';
+import { useTheme } from '../context/ThemeContext';
 
 const MONTHS = [
   'Gennaio', 'Febbraio', 'Marzo', 'Aprile', 'Maggio', 'Giugno',
@@ -34,29 +35,13 @@ export const RentalManager: React.FC = () => {
   const [records, setRecords] = useState<RentalRecord[]>([]);
   const [properties, setProperties] = useState<Property[]>([]);
   const [tenants, setTenants] = useState<Tenant[]>([]);
-  const [theme, setTheme] = useState<'DEFAULT' | 'NEON'>('DEFAULT');
+  const { theme, isNeon } = useTheme();
 
   // Ricevute & Notifiche
   const [selectedReceipt, setSelectedReceipt] = useState<RentReceipt | null>(null);
   const [receiptTenant, setReceiptTenant] = useState<Tenant | undefined>(undefined);
   const [sendingReminderPropId, setSendingReminderPropId] = useState<string | null>(null);
   const [actionFeedback, setActionFeedback] = useState<{ id: string; success: boolean; message: string } | null>(null);
-
-  // Monitoraggio dinamico del cambio tema
-  useEffect(() => {
-    const observer = new MutationObserver(() => {
-      const isNeon = document.documentElement.classList.contains('theme-neon');
-      setTheme(isNeon ? 'NEON' : 'DEFAULT');
-    });
-    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
-    
-    const isNeon = document.documentElement.classList.contains('theme-neon');
-    setTheme(isNeon ? 'NEON' : 'DEFAULT');
-
-    return () => observer.disconnect();
-  }, []);
-
-  const isNeon = theme === 'NEON';
   
   // Stati Filtri Visualizzazione
   const [filterYear, setFilterYear] = useState<number | 'ALL'>('ALL');

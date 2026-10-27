@@ -16,6 +16,7 @@ import { db } from '../services/dbService';
 import { notificationService } from '../services/notificationService';
 import { PieChart, Pie, Cell, ResponsiveContainer, LineChart, Line, XAxis, Tooltip, YAxis, CartesianGrid, Legend } from 'recharts';
 import { MarketForecaster } from './MarketForecaster';
+import { useTheme } from '../context/ThemeContext';
 import {
   getActiveMortgageAtDate,
   getPropertySubrogations,
@@ -146,7 +147,7 @@ export const PropertyAssetManager: React.FC = () => {
   const [filterCategory, setFilterCategory] = useState<string>('ALL');
   const [analysisFilterType, setAnalysisFilterType] = useState<'MONTH' | 'YEAR'>('YEAR');
   const [analysisDate, setAnalysisDate] = useState<string>(new Date().toISOString().split('T')[0]);
-  const [theme, setTheme] = useState<'DEFAULT' | 'NEON'>('DEFAULT');
+  const { theme } = useTheme();
   const [hoveredCategory, setHoveredCategory] = useState<string | null>(null);
 
   const [newCost, setNewCost] = useState<Partial<RecurringCost>>({
@@ -195,15 +196,6 @@ export const PropertyAssetManager: React.FC = () => {
       attachment: undefined
     });
   };
-
-  /* ---- theme observer (immutato) ---- */
-  useEffect(() => {
-    const apply = () => setTheme(document.documentElement.classList.contains('theme-neon') ? 'NEON' : 'DEFAULT');
-    const observer = new MutationObserver(apply);
-    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
-    apply();
-    return () => observer.disconnect();
-  }, []);
 
   useEffect(() => {
     loadData();

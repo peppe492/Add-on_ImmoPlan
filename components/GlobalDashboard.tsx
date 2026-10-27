@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { db } from '../services/dbService';
+import { useTheme } from '../context/ThemeContext';
 import { Property, RentalRecord, ValuationRecord, InvoiceRecord, MortgageSubrogation } from '../types';
 import { getAnnualDeductionsByProperty, getAnnualDeductionsTotal } from '../services/taxDeductionService';
 import { getActiveMortgageAtDate, getPropertySubrogations } from '../services/mortgageService';
@@ -933,7 +934,7 @@ export const GlobalDashboard: React.FC<GlobalDashboardProps> = ({ portalTarget }
   const [invoices, setInvoices] = useState<InvoiceRecord[]>([]);
   const [includeTaxRefunds, setIncludeTaxRefunds] = useState<boolean>(true);
   const [excludedCategories, setExcludedCategories] = useState<string[]>([]);
-  const [theme, setTheme] = useState<'DEFAULT' | 'NEON'>('DEFAULT');
+  const { theme } = useTheme();
   const [isLoading, setIsLoading] = useState(true);
   const [propId, setPropId] = useState('ALL');
   const [tf, setTf] = useState<TF>('6M');
@@ -947,11 +948,6 @@ export const GlobalDashboard: React.FC<GlobalDashboardProps> = ({ portalTarget }
     const handleResize = () => setIsDesktop(window.innerWidth >= 1024);
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
-  }, []);
-  useEffect(() => {
-    const apply = () => setTheme(document.documentElement.classList.contains('theme-neon') ? 'NEON' : 'DEFAULT');
-    const obs = new MutationObserver(apply); obs.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] }); apply();
-    return () => obs.disconnect();
   }, []);
   useEffect(() => {
     (async () => {

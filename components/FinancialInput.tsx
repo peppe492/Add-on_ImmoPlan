@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { FinancialData, CostDetail, Scenario, RenovationItem, Attachment, Portfolio, CostAssignment, PaymentRecord, Property } from '../types.ts';
 import { SmartAssignmentModal } from './SmartAssignmentModal.tsx';
 import { db } from '../services/dbService';
+import { useTheme } from '../context/ThemeContext';
 
 /* =====================================================================================
    ImmoPlan · Acquisto / Editor Finanziario — "Bento Terminal" reskin.
@@ -214,9 +215,7 @@ export const FinancialInput: React.FC<Props> = ({ data, onChange, scenarios, act
   const importInputRef = useRef<HTMLInputElement>(null);
   const [isRenaming, setIsRenaming] = useState(false);
   const [renameVal, setRenameVal] = useState('');
-  const [theme, setTheme] = useState<'DEFAULT' | 'NEON'>('DEFAULT');
-  useEffect(() => { const apply = () => setTheme(document.documentElement.classList.contains('theme-neon') ? 'NEON' : 'DEFAULT'); const obs = new MutationObserver(apply); obs.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] }); apply(); return () => obs.disconnect(); }, []);
-  const isNeon = theme === 'NEON';
+  const { theme, isNeon } = useTheme();
   const activeScenario = useMemo(() => scenarios.find(s => s.id === activeScenarioId), [scenarios, activeScenarioId]);
   const [availableProps, setAvailableProps] = useState<Property[]>([]);
   useEffect(() => {

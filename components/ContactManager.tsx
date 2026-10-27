@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Tenant, Landlord, Attachment, Property, RentalRecord } from '../types';
 import { db } from '../services/dbService';
+import { useTheme } from '../context/ThemeContext';
 
 /* =====================================================================================
    ImmoPlan · Contatti (Rubrica) — "Bento Terminal" reskin. Logica identica.
@@ -29,16 +30,9 @@ export const ContactManager: React.FC = () => {
   const [records, setRecords] = useState<RentalRecord[]>([]);
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [theme, setTheme] = useState<'DEFAULT' | 'NEON'>('DEFAULT');
+  const { theme, isNeon } = useTheme();
   const blank = { name: '', email: '', phone: '', iban: '', taxCode: '', contractType: 'LIBERO_4_4', notes: '', attachments: [] as Attachment[] };
   const [formData, setFormData] = useState<any>(blank);
-
-  useEffect(() => {
-    const apply = () => setTheme(document.documentElement.classList.contains('theme-neon') ? 'NEON' : 'DEFAULT');
-    const obs = new MutationObserver(apply); obs.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] }); apply();
-    return () => obs.disconnect();
-  }, []);
-  const isNeon = theme === 'NEON';
 
   useEffect(() => { loadData(); }, []);
   const loadData = async () => {

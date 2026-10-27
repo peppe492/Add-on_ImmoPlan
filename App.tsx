@@ -12,6 +12,7 @@ import { Sidebar } from './components/Sidebar';
 import { CalendarManager } from './components/CalendarManager';
 import { InvoiceTaxArchive } from './components/InvoiceTaxArchive';
 import { HelpCenter } from './components/HelpCenter';
+import { ThemeProvider } from './context/ThemeContext';
 import { FinancialData, MainTab, PurchaseTab, PropertyTab, Scenario, SystemLog } from './types';
 import { db } from './services/dbService';
 
@@ -169,15 +170,6 @@ const App: React.FC = () => {
     if (savedLogs) setLogs(savedLogs);
   }, []);
 
-  useEffect(() => {
-    const root = document.documentElement;
-    root.classList.remove('theme-neon');
-    root.classList.remove('dark');
-    if (data.theme === 'NEON') {
-      root.classList.add('theme-neon');
-      root.classList.add('dark');
-    }
-  }, [data.theme]);
 
   useEffect(() => {
     db.onLog = addLog;
@@ -280,75 +272,80 @@ const App: React.FC = () => {
   if (!isLoaded) return <div className="min-h-screen flex items-center justify-center bg-slate-50 font-bold">Caricamento...</div>;
 
   return (
-    <div className={`min-h-screen flex flex-col transition-colors duration-500 ${data.theme === 'NEON' ? 'bg-[#020617] text-white' : 'bg-[#f8fafc] text-slate-800'}`}>
-      <Sidebar
-        activeTab={activeMainTab}
-        onTabChange={setActiveMainTab}
-        onReset={handleResetAll}
-        onPrint={() => window.print()}
-        isCollapsed={isSidebarCollapsed}
-        onToggle={() => setIsSidebarCollapsed(prev => !prev)}
-        theme={data.theme}
-        onThemeToggle={toggleTheme}
-        portalRef={setPortalTarget}
-        onRestoreComplete={refreshUIFromDB}
-      />
-      <main className="flex-1 min-h-screen relative p-4 pb-24 lg:p-10 transition-all duration-300 ease-in-out">
-        {activeMainTab === MainTab.DASHBOARD && <GlobalDashboard portalTarget={portalTarget} />}
-        {activeMainTab === MainTab.PURCHASE && (
-          <div className="space-y-8 animate-fade-in">
-            <div className="flex justify-start mb-4 no-print overflow-x-auto pb-2 scrollbar-hide">
-              <div className={`p-1 rounded-2xl border shadow-sm inline-flex gap-1 shrink-0 ${data.theme === 'NEON' ? 'bg-slate-900 border-slate-700' : 'bg-white border-slate-200'}`}>
-                <button onClick={() => setActivePurchaseTab(PurchaseTab.INPUT)} className={`px-5 py-2.5 rounded-xl text-xs font-bold transition-all ${activePurchaseTab === PurchaseTab.INPUT ? (data.theme === 'NEON' ? 'bg-brand-500/20 text-brand-400 ring-1 ring-brand-500/50' : 'bg-brand-50 text-brand-700 ring-1 ring-brand-200') : 'text-slate-500'}`}>Editor Dati</button>
-                <button onClick={() => setActivePurchaseTab(PurchaseTab.DASHBOARD)} className={`px-5 py-2.5 rounded-xl text-xs font-bold transition-all ${activePurchaseTab === PurchaseTab.DASHBOARD ? (data.theme === 'NEON' ? 'bg-brand-500/20 text-brand-400 ring-1 ring-brand-500/50' : 'bg-brand-50 text-brand-700 ring-1 ring-brand-200') : 'text-slate-500'}`}>Report</button>
-                <button onClick={() => setActivePurchaseTab(PurchaseTab.INVOICES)} className={`px-5 py-2.5 rounded-xl text-xs font-bold transition-all ${activePurchaseTab === PurchaseTab.INVOICES ? (data.theme === 'NEON' ? 'bg-brand-500/20 text-brand-400 ring-1 ring-brand-500/50' : 'bg-brand-50 text-brand-700 ring-1 ring-brand-200') : 'text-slate-500'}`}>Fatture & Detrazioni</button>
+    <ThemeProvider
+      theme={data.theme}
+      onChangeTheme={(newTheme) => setData(prev => ({ ...prev, theme: newTheme }))}
+    >
+      <div className={`min-h-screen flex flex-col transition-colors duration-500 ${data.theme === 'NEON' ? 'bg-[#020617] text-white' : 'bg-[#f8fafc] text-slate-800'}`}>
+        <Sidebar
+          activeTab={activeMainTab}
+          onTabChange={setActiveMainTab}
+          onReset={handleResetAll}
+          onPrint={() => window.print()}
+          isCollapsed={isSidebarCollapsed}
+          onToggle={() => setIsSidebarCollapsed(prev => !prev)}
+          theme={data.theme}
+          onThemeToggle={toggleTheme}
+          portalRef={setPortalTarget}
+          onRestoreComplete={refreshUIFromDB}
+        />
+        <main className="flex-1 min-h-screen relative p-4 pb-24 lg:p-10 transition-all duration-300 ease-in-out">
+          {activeMainTab === MainTab.DASHBOARD && <GlobalDashboard portalTarget={portalTarget} />}
+          {activeMainTab === MainTab.PURCHASE && (
+            <div className="space-y-8 animate-fade-in">
+              <div className="flex justify-start mb-4 no-print overflow-x-auto pb-2 scrollbar-hide">
+                <div className={`p-1 rounded-2xl border shadow-sm inline-flex gap-1 shrink-0 ${data.theme === 'NEON' ? 'bg-slate-900 border-slate-700' : 'bg-white border-slate-200'}`}>
+                  <button onClick={() => setActivePurchaseTab(PurchaseTab.INPUT)} className={`px-5 py-2.5 rounded-xl text-xs font-bold transition-all ${activePurchaseTab === PurchaseTab.INPUT ? (data.theme === 'NEON' ? 'bg-brand-500/20 text-brand-400 ring-1 ring-brand-500/50' : 'bg-brand-50 text-brand-700 ring-1 ring-brand-200') : 'text-slate-500'}`}>Editor Dati</button>
+                  <button onClick={() => setActivePurchaseTab(PurchaseTab.DASHBOARD)} className={`px-5 py-2.5 rounded-xl text-xs font-bold transition-all ${activePurchaseTab === PurchaseTab.DASHBOARD ? (data.theme === 'NEON' ? 'bg-brand-500/20 text-brand-400 ring-1 ring-brand-500/50' : 'bg-brand-50 text-brand-700 ring-1 ring-brand-200') : 'text-slate-500'}`}>Report</button>
+                  <button onClick={() => setActivePurchaseTab(PurchaseTab.INVOICES)} className={`px-5 py-2.5 rounded-xl text-xs font-bold transition-all ${activePurchaseTab === PurchaseTab.INVOICES ? (data.theme === 'NEON' ? 'bg-brand-500/20 text-brand-400 ring-1 ring-brand-500/50' : 'bg-brand-50 text-brand-700 ring-1 ring-brand-200') : 'text-slate-500'}`}>Fatture & Detrazioni</button>
+                </div>
               </div>
+              {activePurchaseTab === PurchaseTab.INPUT ? (
+                <FinancialInput data={data} onChange={setData} scenarios={scenarios} activeScenarioId={activeScenarioId} onSaveScenario={handleSaveScenario} onLoadScenario={handleLoadScenario} onDeleteScenario={handleDeleteScenario} onUpdateScenario={handleUpdateScenario} onUpdateScenarioData={handleUpdateScenarioData} onImportScenarios={handleImportScenarios} />
+              ) : activePurchaseTab === PurchaseTab.DASHBOARD ? (
+                <Dashboard data={data} onChange={setData} />
+              ) : (
+                <InvoiceTaxArchive
+                  theme={data.theme}
+                  owner1Name={data.owner1Name || 'Giuseppe'}
+                  owner2Name={data.owner2Name || 'Claudia'}
+                />
+              )}
             </div>
-            {activePurchaseTab === PurchaseTab.INPUT ? (
-              <FinancialInput data={data} onChange={setData} scenarios={scenarios} activeScenarioId={activeScenarioId} onSaveScenario={handleSaveScenario} onLoadScenario={handleLoadScenario} onDeleteScenario={handleDeleteScenario} onUpdateScenario={handleUpdateScenario} onUpdateScenarioData={handleUpdateScenarioData} onImportScenarios={handleImportScenarios} />
-            ) : activePurchaseTab === PurchaseTab.DASHBOARD ? (
-              <Dashboard data={data} onChange={setData} />
-            ) : (
-              <InvoiceTaxArchive
-                theme={data.theme}
-                owner1Name={data.owner1Name || 'Giuseppe'}
-                owner2Name={data.owner2Name || 'Claudia'}
-              />
-            )}
-          </div>
-        )}
-        {activeMainTab === MainTab.PROPERTY_MGMT && (
-          <div className="space-y-8 animate-fade-in">
-            <div className="flex justify-start mb-4 no-print overflow-x-auto pb-2 scrollbar-hide">
-              <div className={`p-1 rounded-2xl border shadow-sm inline-flex gap-1 shrink-0 ${data.theme === 'NEON' ? 'bg-slate-900 border-slate-700' : 'bg-white border-slate-200'}`}>
-                <button onClick={() => setActivePropertyTab(PropertyTab.ASSETS)} className={`px-5 py-2.5 rounded-xl text-xs font-bold transition-all ${activePropertyTab === PropertyTab.ASSETS ? (data.theme === 'NEON' ? 'bg-brand-500/20 text-brand-400 ring-1 ring-brand-500/50' : 'bg-brand-50 text-brand-700 ring-1 ring-brand-200') : 'text-slate-500'}`}>Patrimonio</button>
-                <button onClick={() => setActivePropertyTab(PropertyTab.RENTALS)} className={`px-5 py-2.5 rounded-xl text-xs font-bold transition-all ${activePropertyTab === PropertyTab.RENTALS ? (data.theme === 'NEON' ? 'bg-brand-500/20 text-brand-400 ring-1 ring-brand-500/50' : 'bg-brand-50 text-brand-700 ring-1 ring-brand-200') : 'text-slate-500'}`}>Affitti</button>
-                <button onClick={() => setActivePropertyTab(PropertyTab.CONTACTS)} className={`px-5 py-2.5 rounded-xl text-xs font-bold transition-all ${activePropertyTab === PropertyTab.CONTACTS ? (data.theme === 'NEON' ? 'bg-brand-500/20 text-brand-400 ring-1 ring-brand-500/50' : 'bg-brand-50 text-brand-700 ring-1 ring-brand-200') : 'text-slate-500'}`}>Anagrafica</button>
+          )}
+          {activeMainTab === MainTab.PROPERTY_MGMT && (
+            <div className="space-y-8 animate-fade-in">
+              <div className="flex justify-start mb-4 no-print overflow-x-auto pb-2 scrollbar-hide">
+                <div className={`p-1 rounded-2xl border shadow-sm inline-flex gap-1 shrink-0 ${data.theme === 'NEON' ? 'bg-slate-900 border-slate-700' : 'bg-white border-slate-200'}`}>
+                  <button onClick={() => setActivePropertyTab(PropertyTab.ASSETS)} className={`px-5 py-2.5 rounded-xl text-xs font-bold transition-all ${activePropertyTab === PropertyTab.ASSETS ? (data.theme === 'NEON' ? 'bg-brand-500/20 text-brand-400 ring-1 ring-brand-500/50' : 'bg-brand-50 text-brand-700 ring-1 ring-brand-200') : 'text-slate-500'}`}>Patrimonio</button>
+                  <button onClick={() => setActivePropertyTab(PropertyTab.RENTALS)} className={`px-5 py-2.5 rounded-xl text-xs font-bold transition-all ${activePropertyTab === PropertyTab.RENTALS ? (data.theme === 'NEON' ? 'bg-brand-500/20 text-brand-400 ring-1 ring-brand-500/50' : 'bg-brand-50 text-brand-700 ring-1 ring-brand-200') : 'text-slate-500'}`}>Affitti</button>
+                  <button onClick={() => setActivePropertyTab(PropertyTab.CONTACTS)} className={`px-5 py-2.5 rounded-xl text-xs font-bold transition-all ${activePropertyTab === PropertyTab.CONTACTS ? (data.theme === 'NEON' ? 'bg-brand-500/20 text-brand-400 ring-1 ring-brand-500/50' : 'bg-brand-50 text-brand-700 ring-1 ring-brand-200') : 'text-slate-500'}`}>Anagrafica</button>
+                </div>
               </div>
+              {activePropertyTab === PropertyTab.ASSETS ? <PropertyAssetManager /> : activePropertyTab === PropertyTab.RENTALS ? <RentalManager /> : <ContactManager />}
             </div>
-            {activePropertyTab === PropertyTab.ASSETS ? <PropertyAssetManager /> : activePropertyTab === PropertyTab.RENTALS ? <RentalManager /> : <ContactManager />}
-          </div>
-        )}
-        {activeMainTab === MainTab.CALENDAR && <CalendarManager />}
-        {activeMainTab === MainTab.ADMIN && (
-          <AdminPanel
-            logs={logs}
-            onResetDatabase={handleResetAll}
-            appData={data}
-            onUpdateAppData={setData}
-            onRefreshData={refreshUIFromDB}
-            onUpdateScenarios={setScenarios}
-          />
-        )}
-        {activeMainTab === MainTab.HELP && (
-          <HelpCenter theme={data.theme} />
-        )}
-      </main>
-      <AIChatbotBubble
-        owner1Name={data.owner1Name || 'Giuseppe'}
-        owner2Name={data.owner2Name || 'Claudia'}
-      />
-    </div>
+          )}
+          {activeMainTab === MainTab.CALENDAR && <CalendarManager />}
+          {activeMainTab === MainTab.ADMIN && (
+            <AdminPanel
+              logs={logs}
+              onResetDatabase={handleResetAll}
+              appData={data}
+              onUpdateAppData={setData}
+              onRefreshData={refreshUIFromDB}
+              onUpdateScenarios={setScenarios}
+            />
+          )}
+          {activeMainTab === MainTab.HELP && (
+            <HelpCenter theme={data.theme} />
+          )}
+        </main>
+        <AIChatbotBubble
+          owner1Name={data.owner1Name || 'Giuseppe'}
+          owner2Name={data.owner2Name || 'Claudia'}
+        />
+      </div>
+    </ThemeProvider>
   );
 };
 

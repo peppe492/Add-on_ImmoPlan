@@ -2,7 +2,21 @@
 
 Tutte le modifiche rilevanti a **MM's PROPERTY Manager (ImmoPlan)** sono documentate in questo file.
 
-## [1.6.1] - 2026-10-27
+## [1.6.2] - 2026-10-27
+
+### ⚡ Refactoring & Ottimizzazioni Architetturali
+- **Scomposizione Modulare Componenti Giganti:**
+  - `InvoiceTaxArchive.tsx` ristrutturato e suddiviso in 9 componenti dedicati sotto `components/invoices/` (`InvoiceTable`, `InvoiceFormModal`, `InvoiceKpiCards`, `InvoiceFilterToolbar`, `InvoiceDocumentPreviewModal`, `InvoiceBackupRestoreModal`, `YearSelectorPopover`, `TaxRulesReferenceAccordion`, `InvoiceBadges`).
+  - `AdminPanel.tsx` ristrutturato e suddiviso in componenti modulari sotto `components/admin/` (`AdminUserProfilesCard`, `AdminDatabaseStatusCard`, `AdminAiSettingsCard`, `AdminThemeSettingsCard`, `AdminTelegramCard`, `AdminHaSensorsCard`, `AdminDangerZoneCard`, `AdminLogViewerCard`).
+- **Centralizzazione Tema Scuro / Neon (`ThemeContext`):**
+  - Creato `context/ThemeContext.tsx` con `ThemeProvider` e hook `useTheme()`.
+  - Eliminati 6 `MutationObserver` duplicati che monitoravano la classe `theme-neon` nel DOM su `GlobalDashboard`, `ContactManager`, `FinancialInput`, `Dashboard`, `RentalManager` e `PropertyAssetManager`, eliminando overhead e re-render ridondanti.
+- **Ottimizzazione Rendering e CSS (`index.html`):**
+  - Rimossa la regola globale universale `* { transition: ... }` che causava layout thrashing e micro-lag nello scorrimento di tabelle e grafici con grandi volumi di dati.
+  - Applicate transizioni CSS mirate e performanti solo sugli elementi interattivi effettivi (`button, a, input, select, textarea, [role="button"], .glass-card-hover`).
+  - Pulizia script e riferimenti duplicati in `index.html`.
+
+---
 
 ### ⚙️ Gestione & Personalizzazione
 - **Attivazione / Disattivazione Funzionalità & Visualizzazione Radar Tassi:**
