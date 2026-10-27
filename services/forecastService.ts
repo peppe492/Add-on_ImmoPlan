@@ -3,7 +3,8 @@ import {
   ForecastSimulationConfig,
   MicroMarketMetrics,
   YearlyForecastResult,
-  PropertyForecastData
+  PropertyForecastData,
+  MortgagePayoffSimulationSummary
 } from '../types';
 import { getLatestOrActiveMortgage, getPropertySubrogations } from './mortgageService';
 
@@ -30,30 +31,36 @@ export const getDefaultSimulationConfig = (property?: Property): ForecastSimulat
     ownerMarginalTaxRate: property?.financials?.marginalTaxRate ?? (property?.financials?.taxRegime === 'IRPEF_ORDINARIA' ? (property?.financials?.defaultTaxRate ?? 35) : 35),
     includeTaxDeductions: true,
     simulationRenovationCost: 0,
-    simulationDeductionRate: 50
+    simulationDeductionRate: 50,
+    simulationPayoffAmount: 0,
+    simulationPayoffYear: 3,
+    simulationPayoffStrategy: 'REDUCE_INSTALLMENT',
+    simulationMortgageRate: property?.financials?.mortgageRate && property.financials.mortgageRate > 0
+      ? property.financials.mortgageRate
+      : 3.5
   };
 };
 
 /**
  * Helper: French Amortization (Ammortamento alla Francese)
- * Calculates remaining loan principal after t years.
+ * Calculates remaining loan principal after elapsed months.
  */
 const calculateRemainingMortgageDebt = (
   initialLoanAmount: number,
   annualRatePct: number,
   durationYears: number,
-  yearsElapsed: number
+  monthsElapsed: number
 ): { remainingDebt: number; monthlyInstallment: number } => {
   if (!initialLoanAmount || initialLoanAmount <= 0 || !durationYears || durationYears <= 0) {
     return { remainingDebt: 0, monthlyInstallment: 0 };
   }
 
-  if (yearsElapsed >= durationYears) {
+  const n = durationYears * 12; // Total months
+  if (monthsElapsed >= n) {
     return { remainingDebt: 0, monthlyInstallment: 0 };
   }
 
-  const n = durationYears * 12; // Total months
-  const k = Math.min(yearsElapsed * 12, n); // Months elapsed
+  const k = Math.max(0, Math.min(Math.round(monthsElapsed), n)); // Months elapsed
 
   // Handle 0% interest rate loan (e.g. subsidized loan / tasso zero)
   if (annualRatePct === 0) {
@@ -98,8 +105,21 @@ export const calculatePropertyForecast = (
     lastUpdated: new Date().toISOString().split('T')[0]
   };
 
-  const initialValue = property.currentValue > 0 ? property.currentValue : (property.purchasePrice || 200000);
-  const purchasePrice = property.purchasePrice || initialValue;
+  const purchasePrice = property.purchasePrice && property.purchasePrice > 0
+    ? property.purchasePrice
+    : (property.currentValue || 200000);
+
+  // Extract chronologically latest manual valuation if available in property.valuations
+  let latestManualValuation: number | undefined;
+  if (property.valuations && property.valuations.length > 0) {
+    const validVals = property.valuations.filter(v => v.date && typeof v.value === 'number' && v.value > 0);
+    if (validVals.length > 0) {
+      const sorted = [...validVals].sort((a, b) => a.date.localeCompare(b.date));
+      latestManualValuation = sorted[sorted.length - 1].value;
+    }
+  }
+
+  const currentValuation = latestManualValuation || (property.currentValue && property.currentValue > 0 ? property.currentValue : purchasePrice);
 
   // 1. Calculate Original Purchase Loan (for initialCashEquity) & Active Mortgage State
   const subs = getPropertySubrogations(property);
@@ -148,13 +168,14 @@ export const calculatePropertyForecast = (
   let durationYears = activeMortgage
     ? (activeMortgage.durationYears || origDuration)
     : origDuration;
-  let mortgageRate = adjustRateForBce(
+  const baseConfiguredRate = config.simulationMortgageRate ?? (
     activeMortgage && activeMortgage.rate !== undefined && activeMortgage.rate !== null
       ? activeMortgage.rate
       : (property.financials?.mortgageRate !== undefined && property.financials?.mortgageRate !== null
           ? property.financials.mortgageRate
           : 3.5)
   );
+  let mortgageRate = adjustRateForBce(baseConfiguredRate);
 
   let initialLoanAmount = 0;
   let monthlyMortgagePayment = 0;
@@ -188,18 +209,10 @@ export const calculatePropertyForecast = (
     initialLoanAmount = computeAnnuityPrincipal(monthlyMortgagePayment, mortgageRate, durationYears);
   }
 
-  // Compute months already elapsed on the active subrogation prior to the forecast start
-  let elapsedMonthsBeforeForecast = 0;
-  if (activeMortgage && activeMortgage.isSubrogated && activeMortgage.startDate) {
-    const sParts = activeMortgage.startDate.split('-');
-    if (sParts.length >= 2) {
-      const sY = parseInt(sParts[0], 10);
-      const sM = parseInt(sParts[1], 10) - 1;
-      if (!isNaN(sY) && !isNaN(sM)) {
-        elapsedMonthsBeforeForecast = Math.max(0, (now.getFullYear() - sY) * 12 + (now.getMonth() - sM));
-      }
-    }
-  }
+  // Lifetime Mortgage Totals (Sum of Principal + Interest at natural maturity)
+  const initialLoanPrincipal = Math.round(initialLoanAmount);
+  const totalMortgageCostLifetime = Math.round(monthlyMortgagePayment * durationYears * 12);
+  const totalMortgageInterestLifetime = Math.max(0, totalMortgageCostLifetime - initialLoanPrincipal);
 
   // Estimated purchase costs ~ 8% of purchase price (notary, agency, taxes)
   const purchaseExpenses = purchasePrice * 0.08;
@@ -226,10 +239,10 @@ export const calculatePropertyForecast = (
   let energyPenaltyBonusVal = 0;
   if (['A', 'B'].includes(activeEnergyClass)) {
     energyDelta = 0.015; // +1.5% bonus annually for green classes A/B
-    energyPenaltyBonusVal = initialValue * 0.015;
+    energyPenaltyBonusVal = currentValuation * 0.015;
   } else if (['E', 'F', 'G'].includes(activeEnergyClass)) {
     energyDelta = -0.020; // -2.0% penalty annually for high-emission classes E/F/G
-    energyPenaltyBonusVal = -initialValue * 0.020;
+    energyPenaltyBonusVal = -currentValuation * 0.020;
   }
 
   // Property Size Multiplier
@@ -256,19 +269,242 @@ export const calculatePropertyForecast = (
     });
   }
 
+  // 1. Base purchase timeline (Anno 1 = anno reale di acquisto registrato)
+  let baseYear = new Date().getFullYear();
+  let purchaseMonth = 1; // 1 to 12
+  let purchaseDay = 1;
+  if (property.purchaseDate) {
+    const parts = property.purchaseDate.split('-');
+    const parsedY = parseInt(parts[0], 10);
+    if (!isNaN(parsedY) && parsedY >= 1990 && parsedY <= 2050) {
+      baseYear = parsedY;
+    }
+    if (parts.length > 1) {
+      const parsedM = parseInt(parts[1], 10);
+      if (!isNaN(parsedM) && parsedM >= 1 && parsedM <= 12) {
+        purchaseMonth = parsedM;
+      }
+    }
+    if (parts.length > 2) {
+      const parsedD = parseInt(parts[2], 10);
+      if (!isNaN(parsedD) && parsedD >= 1 && parsedD <= 31) {
+        purchaseDay = parsedD;
+      }
+    }
+  }
+
+  // Months remaining in Year 1 from purchase:
+  // If purchase occurred on or before the 15th, count the purchase month as full
+  const monthCredit = purchaseDay <= 15 ? 1 : 0;
+  const ownershipMonthsYear1 = Math.max(1, Math.min(12, 12 - purchaseMonth + monthCredit));
+  const ownershipFractionYear1 = ownershipMonthsYear1 / 12;
+
+  // 2. Mortgage Start Date & Actual Months Paid in Year 1
+  let mortgageStartYear = baseYear;
+  let mortgageStartMonth = purchaseMonth;
+  let mortgageStartDay = purchaseDay;
+
+  if (property.financials?.mortgageStartDate) {
+    const mortParts = property.financials.mortgageStartDate.split('-');
+    const parsedMY = parseInt(mortParts[0], 10);
+    const parsedMM = parseInt(mortParts[1], 10);
+    const parsedMD = parseInt(mortParts[2], 10);
+    if (!isNaN(parsedMY) && parsedMY >= 1990 && parsedMY <= 2050) {
+      mortgageStartYear = parsedMY;
+    }
+    if (!isNaN(parsedMM) && parsedMM >= 1 && parsedMM <= 12) {
+      mortgageStartMonth = parsedMM;
+    }
+    if (!isNaN(parsedMD) && parsedMD >= 1 && parsedMD <= 31) {
+      mortgageStartDay = parsedMD;
+    }
+  }
+
+  // Months of mortgage paid in Year 1 (calendar year baseYear)
+  let mortgageMonthsYear1 = 12;
+  if (mortgageStartYear > baseYear) {
+    mortgageMonthsYear1 = 0; // Not yet started in Year 1
+  } else if (mortgageStartYear === baseYear) {
+    const mortCredit = mortgageStartDay <= 15 ? 1 : 0;
+    mortgageMonthsYear1 = Math.max(0, Math.min(12, 12 - mortgageStartMonth + mortCredit));
+  } else {
+    // Started in an earlier year prior to baseYear
+    mortgageMonthsYear1 = 12;
+  }
+
+  // Pre-calculate Mortgage Payoff Simulation if configured
+  const simPayoffAmount = Math.max(0, config.simulationPayoffAmount || 0);
+  const simPayoffYear = Math.max(1, Math.min(10, config.simulationPayoffYear || 3));
+  const simStrategy = config.simulationPayoffStrategy || 'REDUCE_INSTALLMENT';
+
+  // Base amortization schedule without payoff for baseline comparison
+  const totalLoanMonths = durationYears * 12;
+  const baselineSchedule: { remainingDebt: number; monthlyInstallment: number }[] = [];
+  for (let y = 1; y <= 10; y++) {
+    const elapsedMonthsAtYearEnd = Math.min(totalLoanMonths, mortgageMonthsYear1 + (y - 1) * 12);
+    baselineSchedule.push(calculateRemainingMortgageDebt(
+      initialLoanAmount,
+      mortgageRate,
+      durationYears,
+      elapsedMonthsAtYearEnd
+    ));
+  }
+
+  // Debt immediately prior to payoff year
+  const priorPayoffMonths = simPayoffYear === 1
+    ? 0
+    : Math.min(totalLoanMonths, mortgageMonthsYear1 + (simPayoffYear - 2) * 12);
+
+  const debtPriorToPayoff = simPayoffYear === 1
+    ? initialLoanAmount
+    : calculateRemainingMortgageDebt(initialLoanAmount, mortgageRate, durationYears, priorPayoffMonths).remainingDebt;
+
+  const isPayoffApplicable = simPayoffAmount > 0 && debtPriorToPayoff > 0 && initialLoanAmount > 0;
+  const actualPayoffAmount = isPayoffApplicable ? Math.min(simPayoffAmount, debtPriorToPayoff) : 0;
+  const postPayoffPrincipal = Math.max(0, debtPriorToPayoff - actualPayoffAmount);
+  const remainingMonthsAtPayoff = Math.max(1, totalLoanMonths - priorPayoffMonths);
+  const remainingYearsAtPayoff = Number((remainingMonthsAtPayoff / 12).toFixed(1));
+
+  let newMonthlyInstallmentPostPayoff = monthlyMortgagePayment;
+  let newRemainingYearsPostPayoff = remainingYearsAtPayoff;
+  let totalInterestSaved = 0;
+
+  if (isPayoffApplicable && actualPayoffAmount > 0) {
+    const effectiveR = (mortgageRate > 0 ? mortgageRate : 3.5) / 12 / 100;
+    const nRemaining = remainingMonthsAtPayoff;
+
+    if (simStrategy === 'REDUCE_INSTALLMENT') {
+      // Strategy 1: Reduce Monthly Installment, keep original remaining duration
+      if (postPayoffPrincipal === 0) {
+        newMonthlyInstallmentPostPayoff = 0;
+      } else if (effectiveR === 0) {
+        newMonthlyInstallmentPostPayoff = postPayoffPrincipal / nRemaining;
+      } else {
+        newMonthlyInstallmentPostPayoff = postPayoffPrincipal * (effectiveR * Math.pow(1 + effectiveR, nRemaining)) / (Math.pow(1 + effectiveR, nRemaining) - 1);
+      }
+      // Interest saved = total installments that would have been paid vs new installments + payoff
+      const oldTotalRemainingPayments = (monthlyMortgagePayment > 0 ? monthlyMortgagePayment : baselineSchedule[0].monthlyInstallment) * nRemaining;
+      const newTotalRemainingPayments = newMonthlyInstallmentPostPayoff * nRemaining + actualPayoffAmount;
+      totalInterestSaved = Math.max(0, Math.round(oldTotalRemainingPayments - newTotalRemainingPayments));
+    } else {
+      // Strategy 2: Reduce Duration, keep original monthly installment
+      const origMonthly = monthlyMortgagePayment > 0 ? monthlyMortgagePayment : baselineSchedule[0].monthlyInstallment;
+      if (postPayoffPrincipal === 0) {
+        newRemainingYearsPostPayoff = 0;
+        newMonthlyInstallmentPostPayoff = 0;
+        totalInterestSaved = Math.max(0, Math.round(origMonthly * nRemaining - actualPayoffAmount));
+      } else if (origMonthly <= postPayoffPrincipal * effectiveR) {
+        // Fallback: installment doesn't cover interest
+        newRemainingYearsPostPayoff = remainingYearsAtPayoff;
+      } else if (effectiveR === 0) {
+        const newMonths = Math.ceil(postPayoffPrincipal / origMonthly);
+        newRemainingYearsPostPayoff = Number((newMonths / 12).toFixed(1));
+        totalInterestSaved = 0;
+      } else {
+        // n = -ln(1 - (P * r / PMT)) / ln(1 + r)
+        const numMonths = Math.ceil(-Math.log(1 - (postPayoffPrincipal * effectiveR / origMonthly)) / Math.log(1 + effectiveR));
+        newRemainingYearsPostPayoff = Number((Math.max(1, numMonths) / 12).toFixed(1));
+        const oldTotalPayments = origMonthly * nRemaining;
+        const newTotalPayments = (origMonthly * numMonths) + actualPayoffAmount;
+        totalInterestSaved = Math.max(0, Math.round(oldTotalPayments - newTotalPayments));
+      }
+    }
+  }
+
+  const mortgagePayoffSummary: MortgagePayoffSimulationSummary | undefined = isPayoffApplicable ? {
+    payoffAmount: actualPayoffAmount,
+    payoffYear: simPayoffYear,
+    calendarYear: baseYear + (simPayoffYear - 1),
+    strategy: simStrategy,
+    previousDebtAtPayoff: Math.round(debtPriorToPayoff),
+    newDebtAtPayoff: Math.round(postPayoffPrincipal),
+    originalMonthlyInstallment: Math.round(monthlyMortgagePayment > 0 ? monthlyMortgagePayment : baselineSchedule[0].monthlyInstallment),
+    newMonthlyInstallment: Math.round(newMonthlyInstallmentPostPayoff),
+    monthlySavings: Math.max(0, Math.round((monthlyMortgagePayment > 0 ? monthlyMortgagePayment : baselineSchedule[0].monthlyInstallment) - newMonthlyInstallmentPostPayoff)),
+    originalRemainingYears: remainingYearsAtPayoff,
+    newRemainingYears: newRemainingYearsPostPayoff,
+    yearsSaved: Number(Math.max(0, remainingYearsAtPayoff - newRemainingYearsPostPayoff).toFixed(1)),
+    totalInterestSaved,
+    applicable: true
+  } : undefined;
+
+  // 1. Collect all known yearly valuation anchors: Year -> Value
+  // Anchors include:
+  // - Purchase price at baseYear
+  // - Any manual valuation in property.valuations (takes latest within that calendar year)
+  // - currentValuation as fallback for currentYear
+  const valuationAnchors = new Map<number, number>();
+  valuationAnchors.set(baseYear, purchasePrice);
+
+  if (property.valuations && property.valuations.length > 0) {
+    const sortedVals = [...property.valuations].sort((a, b) => a.date.localeCompare(b.date));
+    for (const v of sortedVals) {
+      if (v.date && typeof v.value === 'number' && v.value > 0) {
+        const y = parseInt(v.date.split('-')[0], 10);
+        if (!isNaN(y)) {
+          // Latest valuation for year y
+          valuationAnchors.set(y, v.value);
+        }
+      }
+    }
+  }
+
+  const currentYear = new Date().getFullYear();
+  if (!valuationAnchors.has(currentYear) && currentValuation > 0) {
+    valuationAnchors.set(currentYear, currentValuation);
+  }
+
+  // Sorted anchor years
+  const anchorYears = Array.from(valuationAnchors.keys()).sort((a, b) => a - b);
+  const lastAnchorYear = anchorYears[anchorYears.length - 1];
+  const lastAnchorVal = valuationAnchors.get(lastAnchorYear) || purchasePrice;
+
   let cumulativeNetCashFlow = 0;
+  let cumulativePrincipalPaid = 0;
+  let cumulativeInterestPaid = 0;
   const yearlyProjections: YearlyForecastResult[] = [];
 
   for (let year = 1; year <= 10; year++) {
-    // Property Value V(t)
-    const propertyValue = Math.round(initialValue * Math.pow(1 + netAnnualGrowthRate, year));
-    const optimisticValue = Math.round(propertyValue * Math.pow(1.02, year));
-    const pessimisticValue = Math.round(propertyValue * Math.pow(0.98, year));
+    const calendarYear = baseYear + (year - 1);
+    const isYear1 = year === 1;
 
-    // Dynamic Indexed Gross Rent
+    // Timeline ownership fraction and elapsed time in years
+    const ownershipMonths = isYear1 ? ownershipMonthsYear1 : 12;
+
+    // Dynamic Property Value V(t):
+    // 1. If calendarYear is a known anchor: uses that exact value (manual valuation / purchase price)
+    // 2. If calendarYear is between two known anchors: smooth CAGR exponential interpolation connecting them
+    // 3. If calendarYear is beyond the latest anchor: dynamic future projection starting directly from the latest anchor!
+    let propertyValue = 0;
+    let optimisticValue = 0;
+    let pessimisticValue = 0;
+    const isRecordedValuation = valuationAnchors.has(calendarYear) && calendarYear !== baseYear;
+
+    if (valuationAnchors.has(calendarYear)) {
+      propertyValue = valuationAnchors.get(calendarYear)!;
+      optimisticValue = propertyValue;
+      pessimisticValue = propertyValue;
+    } else if (calendarYear < lastAnchorYear) {
+      const prevYear = [...anchorYears].reverse().find(y => y < calendarYear) || baseYear;
+      const nextYear = anchorYears.find(y => y > calendarYear) || lastAnchorYear;
+      const prevVal = valuationAnchors.get(prevYear)!;
+      const nextVal = valuationAnchors.get(nextYear)!;
+      const fraction = (calendarYear - prevYear) / (nextYear - prevYear);
+      propertyValue = Math.round(prevVal * Math.pow(nextVal / prevVal, fraction));
+      optimisticValue = propertyValue;
+      pessimisticValue = propertyValue;
+    } else {
+      // Future projection starting directly from the latest anchor
+      const elapsedFutureYears = calendarYear - lastAnchorYear;
+      propertyValue = Math.round(lastAnchorVal * Math.pow(1 + netAnnualGrowthRate, elapsedFutureYears));
+      optimisticValue = Math.round(propertyValue * Math.pow(1.02, elapsedFutureYears));
+      pessimisticValue = Math.round(propertyValue * Math.pow(0.98, elapsedFutureYears));
+    }
+
+    // Dynamic Indexed Gross Rent proportioned for Year 1 ownership
     const cpiInflationRate = config.cpiInflationTarget / 100;
     const rentIndexingFactor = Math.pow(1 + cpiInflationRate * 0.75, year - 1);
-    const annualGrossRent = baseAnnualGrossRent * rentIndexingFactor;
+    const annualGrossRent = (monthlyRent * ownershipMonths) * rentIndexingFactor;
 
     // Vacancy Rate Deduction
     const vacancyRatio = Math.min(0.5, (config.vacancyWeeksPerYear || 0) / 52);
@@ -287,31 +523,93 @@ export const calculatePropertyForecast = (
       taxAmount = effectiveGrossRent * 0.95 * marginalRate; // 5% flat deduction for IRPEF
     }
 
-    // Net operating rent (allows negative values when vacancy or operating expenses exceed rent)
-    const annualNetRent = effectiveGrossRent - taxAmount - annualOperatingExpenses;
+    // Operating expenses proportioned for Year 1 ownership
+    const proportionedOperatingExpenses = (annualOperatingExpenses / 12) * ownershipMonths;
+    const annualNetRent = effectiveGrossRent - taxAmount - proportionedOperatingExpenses;
 
-    // Mortgage Amortization & Debt (accounting for months already elapsed on active subrogation)
-    const effectiveYearsElapsed = (elapsedMonthsBeforeForecast / 12) + year;
-    const { remainingDebt, monthlyInstallment } = calculateRemainingMortgageDebt(
-      initialLoanAmount,
-      mortgageRate,
-      durationYears,
-      effectiveYearsElapsed
-    );
-    const windowStartMonth = elapsedMonthsBeforeForecast + (year - 1) * 12;
-    const totalDurationMonths = durationYears * 12;
-    const activeMonthsInYear = Math.max(0, Math.min(12, totalDurationMonths - windowStartMonth));
-    const effectiveMonthlyPmt = monthlyMortgagePayment > 0 ? monthlyMortgagePayment : monthlyInstallment;
-    const annualMortgagePayment = activeMonthsInYear > 0 ? effectiveMonthlyPmt * activeMonthsInYear : 0;
+    // Mortgage Months actually paid this year & amortization
+    let remainingDebt = 0;
+    let annualMortgagePayment = 0;
+    let mortgageMonthsPaidThisYear = 0;
+
+    const baseMonthlyInstallment = monthlyMortgagePayment > 0 ? monthlyMortgagePayment : baselineSchedule[0].monthlyInstallment;
+
+    if (!isPayoffApplicable || year < simPayoffYear) {
+      // Standard amortization prior to payoff
+      const priorMonths = isYear1 ? 0 : (mortgageMonthsYear1 + (year - 2) * 12);
+      const endMonths = Math.min(totalLoanMonths, mortgageMonthsYear1 + (year - 1) * 12);
+      mortgageMonthsPaidThisYear = isYear1 ? mortgageMonthsYear1 : Math.max(0, Math.min(12, totalLoanMonths - priorMonths));
+
+      const baseCalc = calculateRemainingMortgageDebt(
+        initialLoanAmount,
+        mortgageRate,
+        durationYears,
+        endMonths
+      );
+      remainingDebt = baseCalc.remainingDebt;
+      annualMortgagePayment = baseMonthlyInstallment * mortgageMonthsPaidThisYear;
+    } else {
+      // Post-payoff or payoff year
+      const yearsSincePayoff = year - simPayoffYear; // 0 in payoff year
+      const payoffYearMonths = simPayoffYear === 1 ? mortgageMonthsYear1 : 12;
+
+      if (simStrategy === 'REDUCE_INSTALLMENT') {
+        const postPayoffTotalMonths = remainingMonthsAtPayoff;
+        const priorMonthsPost = yearsSincePayoff === 0 ? 0 : payoffYearMonths + (yearsSincePayoff - 1) * 12;
+        const monthsPaidPost = yearsSincePayoff === 0 ? payoffYearMonths : Math.max(0, Math.min(12, postPayoffTotalMonths - priorMonthsPost));
+        mortgageMonthsPaidThisYear = monthsPaidPost;
+
+        const elapsedPostMonths = yearsSincePayoff === 0 ? payoffYearMonths : payoffYearMonths + yearsSincePayoff * 12;
+        const postCalc = calculateRemainingMortgageDebt(
+          postPayoffPrincipal,
+          mortgageRate,
+          Math.max(1, Math.ceil(remainingYearsAtPayoff)),
+          elapsedPostMonths
+        );
+        remainingDebt = postCalc.remainingDebt;
+        annualMortgagePayment = newMonthlyInstallmentPostPayoff * mortgageMonthsPaidThisYear;
+      } else {
+        // REDUCE_DURATION
+        const newDurationMonths = Math.ceil(newRemainingYearsPostPayoff * 12);
+        const priorMonthsPost = yearsSincePayoff === 0 ? 0 : payoffYearMonths + (yearsSincePayoff - 1) * 12;
+        const monthsPaidPost = Math.max(0, Math.min(12, newDurationMonths - priorMonthsPost));
+        mortgageMonthsPaidThisYear = monthsPaidPost;
+
+        const elapsedPostMonths = yearsSincePayoff === 0 ? payoffYearMonths : payoffYearMonths + yearsSincePayoff * 12;
+        const postCalc = calculateRemainingMortgageDebt(
+          postPayoffPrincipal,
+          mortgageRate,
+          Math.max(1, Math.ceil(newRemainingYearsPostPayoff)),
+          Math.min(newDurationMonths, elapsedPostMonths)
+        );
+        remainingDebt = postCalc.remainingDebt;
+        annualMortgagePayment = baseMonthlyInstallment * mortgageMonthsPaidThisYear;
+      }
+    }
+
+    // Separate Quota Capitale (Principal) and Quota Interessi (Interest)
+    const priorDebt = isYear1
+      ? initialLoanAmount
+      : yearlyProjections[year - 2].remainingMortgageDebt;
+
+    const payoffPrincipalPaid = (isPayoffApplicable && year === simPayoffYear) ? actualPayoffAmount : 0;
+    const installmentPrincipalPaid = Math.max(0, (priorDebt - remainingDebt) - payoffPrincipalPaid);
+    const annualInterestPayment = Math.max(0, annualMortgagePayment - installmentPrincipalPaid);
+    const annualPrincipalPayment = installmentPrincipalPaid + payoffPrincipalPaid;
+
+    cumulativePrincipalPaid += annualPrincipalPayment;
+    cumulativeInterestPaid += annualInterestPayment;
 
     // Net Cash Flow & 730 Tax Deductions Integration
-    const currentYear = new Date().getFullYear();
-    const simCalendarYear = currentYear + (year - 1);
-    let taxDeductionQuota = (annualTaxDeductions && annualTaxDeductions[simCalendarYear]) ? annualTaxDeductions[simCalendarYear] : 0;
-    if (taxDeductionQuota === 0 && (config.simulationRenovationCost || 0) > 0 && year <= 10) {
-      const eligibleBase = Math.min(config.simulationRenovationCost || 0, 96000);
-      const totalDetr = eligibleBase * ((config.simulationDeductionRate || 50) / 100);
-      taxDeductionQuota = totalDetr / 10;
+    let taxDeductionQuota = (annualTaxDeductions && annualTaxDeductions[calendarYear]) ? annualTaxDeductions[calendarYear] : 0;
+    if (taxDeductionQuota === 0 && (config.simulationRenovationCost || 0) > 0) {
+      // In Italia le detrazioni fiscali per lavori eseguiti nell'Anno 1 (anno fatturazione)
+      // decorrono dall'Anno 2 (anno fiscale successivo, dichiarazione 730) per 10 rate annuali
+      if (year >= 2 && year <= 11) {
+        const eligibleBase = Math.min(config.simulationRenovationCost || 0, 96000);
+        const totalDetr = eligibleBase * ((config.simulationDeductionRate || 50) / 100);
+        taxDeductionQuota = totalDetr / 10;
+      }
     }
 
     const netCashFlowWithoutTax = annualNetRent - annualMortgagePayment;
@@ -333,6 +631,7 @@ export const calculatePropertyForecast = (
 
     yearlyProjections.push({
       year,
+      calendarYear,
       propertyValue,
       optimisticValue,
       pessimisticValue,
@@ -346,7 +645,16 @@ export const calculatePropertyForecast = (
       roePercent,
       energyPenaltyBonus: Math.round(energyPenaltyBonusVal),
       taxDeductionQuota: Math.round(taxDeductionQuota),
-      netCashFlowWithoutTax: Math.round(netCashFlowWithoutTax)
+      netCashFlowWithoutTax: Math.round(netCashFlowWithoutTax),
+      annualMortgagePayment: Math.round(annualMortgagePayment),
+      annualPrincipalPayment: Math.round(annualPrincipalPayment),
+      annualInterestPayment: Math.round(annualInterestPayment),
+      cumulativePrincipalPaid: Math.round(cumulativePrincipalPaid),
+      cumulativeInterestPaid: Math.round(cumulativeInterestPaid),
+      mortgageMonthsPaid: mortgageMonthsPaidThisYear,
+      ownershipMonths,
+      isPayoffYear: isPayoffApplicable && year === simPayoffYear,
+      isRecordedValuation
     });
   }
 
@@ -354,7 +662,18 @@ export const calculatePropertyForecast = (
     config,
     yearlyProjections,
     metrics,
-    lastSimulatedAt: new Date().toISOString()
+    lastSimulatedAt: new Date().toISOString(),
+    baseYear,
+    purchaseMonth,
+    ownershipMonthsYear1,
+    mortgageStartYear,
+    mortgageStartMonth,
+    mortgageMonthsYear1,
+    initialLoanPrincipal,
+    totalMortgageInterestLifetime,
+    totalMortgageCostLifetime,
+    effectiveMortgageRate: Number(mortgageRate.toFixed(2)),
+    mortgagePayoffSummary
   };
 };
 
