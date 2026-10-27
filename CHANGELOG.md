@@ -2,6 +2,16 @@
 
 Tutte le modifiche rilevanti a **MM's PROPERTY Manager (ImmoPlan)** sono documentate in questo file.
 
+## [1.6.1] - 2026-10-27
+
+### ⚙️ Gestione & Personalizzazione
+- **Attivazione / Disattivazione Funzionalità & Visualizzazione Radar Tassi:**
+  - Aggiunto nel pannello **Admin** (sezione *Scadenziario Canoni & Bot Telegram*) un interruttore master per abilitare o disabilitare l'intera funzionalità e visualizzazione di *"📡 RADAR TASSI BANCHE · ITALIA & MILANO"*.
+  - Quando disattivato, tutti i componenti visuali del Radar vengono completamente nascosti nell'applicazione (pulsante in alto *"📡 Radar Tassi & Banche Milano"*, banner riassuntivo del portafoglio e blocco di confronto offerte nella Scheda Economica dei singoli immobili), con sospensione delle scansioni e dei report automatici.
+  - Sincronizzazione atomica e istantanea in tempo reale tra la pagina Admin e la scheda Patrimonio.
+
+---
+
 ## [1.6.0] - 2026-10-27
 
 ### 🚀 Nuove Funzionalità

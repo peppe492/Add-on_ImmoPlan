@@ -208,6 +208,18 @@ export const PropertyAssetManager: React.FC = () => {
   useEffect(() => {
     loadData();
     loadRadarConfig();
+
+    const onRadarSettingsChanged = (e: any) => {
+      if (e?.detail?.enabled !== undefined) {
+        setRadarSettings(prev => ({ ...prev, enabled: Boolean(e.detail.enabled) }));
+      } else {
+        loadRadarConfig();
+      }
+    };
+    window.addEventListener('immoplan:radar-settings-changed', onRadarSettingsChanged);
+    return () => {
+      window.removeEventListener('immoplan:radar-settings-changed', onRadarSettingsChanged);
+    };
   }, []);
 
   const loadRadarConfig = async () => {
@@ -965,6 +977,7 @@ export const PropertyAssetManager: React.FC = () => {
 
         {/* RADAR TASSI BANCHE (ITALIA & MILANO) & CONFRONTO SURROGA */}
         {(() => {
+          if (radarSettings.enabled === false) return null;
           const opp = evaluatePropertySubrogation(p, bankCatalog, marketIndices, radarSettings, new Date());
           if (!opp) return null;
 
@@ -1986,15 +1999,17 @@ export const PropertyAssetManager: React.FC = () => {
           <p>Gestione centralizzata e ottimizzazione dei tuoi asset immobiliari</p>
         </div>
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-          <button
-            className="btn radar-open-btn"
-            onClick={() => (document.getElementById('mortgage_radar_modal') as any)?.showModal()}
-          >
-            📡 Radar Tassi &amp; Banche Milano
-            {portfolioRadarReport.advantageousCount > 0 && (
-              <span className="radar-count-pill">{portfolioRadarReport.advantageousCount}</span>
-            )}
-          </button>
+          {radarSettings.enabled !== false && (
+            <button
+              className="btn radar-open-btn"
+              onClick={() => (document.getElementById('mortgage_radar_modal') as any)?.showModal()}
+            >
+              📡 Radar Tassi &amp; Banche Milano
+              {portfolioRadarReport.advantageousCount > 0 && (
+                <span className="radar-count-pill">{portfolioRadarReport.advantageousCount}</span>
+              )}
+            </button>
+          )}
           <button className="btn primary" onClick={() => { setNewPropData({ name: '', address: '', type: 'RESIDENTIAL', status: 'MAIN_RESIDENCE', purchasePrice: 0, currentValue: 0, notes: '', coordinates: { lat: 0, lng: 0 } }); (document.getElementById('new_property_modal') as any)?.showModal(); }}>{ic(PATH.plus, 15, 2.4)} Aggiungi Immobile</button>
         </div>
       </div>
@@ -2014,8 +2029,8 @@ export const PropertyAssetManager: React.FC = () => {
         </div>
       </div>
 
-      {/* Banner Opportunità Surroga Mutui se sono presenti mutui attivi */}
-      {portfolioRadarReport.propertiesAnalyzedCount > 0 && (
+      {/* Banner Opportunità Surroga Mutui se sono presenti mutui attivi ed è abilitato */}
+      {radarSettings.enabled !== false && portfolioRadarReport.propertiesAnalyzedCount > 0 && (
         <div className={`radar-portfolio-banner ${portfolioRadarReport.advantageousCount > 0 ? 'has-adv' : ''}`}>
           <div className="rpb-left">
             <span className="rpb-icon">🏦</span>
@@ -2108,6 +2123,7 @@ export const PropertyAssetManager: React.FC = () => {
       )}
 
       {/* Modal Radar Mutui & Banche (Italia & Milano) */}
+      {radarSettings.enabled !== false && (
       <dialog id="mortgage_radar_modal" className="ipb-modal radar-wide-modal">
         <div className="mhead">
           <div>
@@ -2283,6 +2299,7 @@ export const PropertyAssetManager: React.FC = () => {
           )}
         </div>
       </dialog>
+      )}
 
       <dialog id="new_property_modal" className="ipb-modal">
         <div className="mhead"><div><h3>Nuovo Immobile</h3><p>Inserisci un nuovo asset nel tuo patrimonio</p></div>
