@@ -1595,6 +1595,7 @@ function buildItalianAndMilanBankCatalogServer(indices = getDefaultMarketIndices
       periziaGratuita: true,
       istruttoriaGratuita: true,
       notes: 'Sede storica Milano Piazza Meda · Surroga zero spese + sconto extra -20 bps per immobili Classe A/B/C',
+      sourceUrl: 'https://www.bancobpm.it/privati/mutui/',
       updatedAt
     },
     {
@@ -1615,6 +1616,7 @@ function buildItalianAndMilanBankCatalogServer(indices = getDefaultMarketIndices
       periziaGratuita: true,
       istruttoriaGratuita: true,
       notes: 'Polo digitale Gruppo Banco BPM Milano · Perizia, istruttoria e incasso rata 100% gratuiti',
+      sourceUrl: 'https://www.webank.it/webankpub/wb/prodotti.do?tab=Mutui',
       updatedAt
     },
     {
@@ -1635,6 +1637,7 @@ function buildItalianAndMilanBankCatalogServer(indices = getDefaultMarketIndices
       periziaGratuita: true,
       istruttoriaGratuita: true,
       notes: 'Direzione Regionale Milano e Lombardia · Condizioni dedicate Under 36 e Mutuo Green',
+      sourceUrl: 'https://www.intesasanpaolo.com/it/persone-e-famiglie/prodotti/mutui.html',
       updatedAt
     },
     {
@@ -1655,6 +1658,7 @@ function buildItalianAndMilanBankCatalogServer(indices = getDefaultMarketIndices
       periziaGratuita: true,
       istruttoriaGratuita: true,
       notes: 'Forte presidio filiali Milano · Opzione Flexi e sconto tasso -0.10% su riqualificazione energetica',
+      sourceUrl: 'https://www.credit-agricole.it/privati/mutui',
       updatedAt
     },
     {
@@ -1675,6 +1679,7 @@ function buildItalianAndMilanBankCatalogServer(indices = getDefaultMarketIndices
       periziaGratuita: true,
       istruttoriaGratuita: true,
       notes: 'Gruppo Mediobanca Milano · Gestione fast-track per immobili residenziali a Milano e provincia',
+      sourceUrl: 'https://www.mediobancapremier.com/it/privati/mutui.html',
       updatedAt
     },
     {
@@ -1695,6 +1700,7 @@ function buildItalianAndMilanBankCatalogServer(indices = getDefaultMarketIndices
       periziaGratuita: true,
       istruttoriaGratuita: true,
       notes: 'Headquarter Piazza Gae Aulenti Milano · Taglio rata per immobili in classe energetica A, B o C',
+      sourceUrl: 'https://www.unicredit.it/it/privati/mutui.html',
       updatedAt
     },
     {
@@ -1715,6 +1721,7 @@ function buildItalianAndMilanBankCatalogServer(indices = getDefaultMarketIndices
       periziaGratuita: true,
       istruttoriaGratuita: true,
       notes: 'Direzione Generale Milano Bicocca · Extra sconto -0.20% con addebito su Conto Corrente Arancio',
+      sourceUrl: 'https://www.ing.it/mutuo-arancio/mutuo-surroga.html',
       updatedAt
     },
     {
@@ -1735,6 +1742,7 @@ function buildItalianAndMilanBankCatalogServer(indices = getDefaultMarketIndices
       periziaGratuita: true,
       istruttoriaGratuita: true,
       notes: 'Sede centrale Milano Piazza Durante · Istruttoria digitale rapida per clienti e nuovi correntisti',
+      sourceUrl: 'https://finecobank.com/it/online/mutui/surroga/',
       updatedAt
     },
     {
@@ -1755,6 +1763,7 @@ function buildItalianAndMilanBankCatalogServer(indices = getDefaultMarketIndices
       periziaGratuita: true,
       istruttoriaGratuita: true,
       notes: 'Torre Diamante Milano Porta Nuova · Surroga a zero spese notarili e peritali',
+      sourceUrl: 'https://bnl.it/it/individui-e-famiglie/mutui',
       updatedAt
     },
     {
@@ -1775,6 +1784,7 @@ function buildItalianAndMilanBankCatalogServer(indices = getDefaultMarketIndices
       periziaGratuita: true,
       istruttoriaGratuita: true,
       notes: 'Rete ex UBI / Carige / BPER su Milano e Lombardia · Condizioni agevolate LTV <= 70%',
+      sourceUrl: 'https://www.bper.it/privati/mutui-e-prestiti/mutui',
       updatedAt
     },
     {
@@ -1795,6 +1805,7 @@ function buildItalianAndMilanBankCatalogServer(indices = getDefaultMarketIndices
       periziaGratuita: true,
       istruttoriaGratuita: true,
       notes: 'Storica presenza su Milano e Lombardia · Zero penali e perizia a carico della banca',
+      sourceUrl: 'https://www.popso.it/privati/mutui',
       updatedAt
     },
     {
@@ -1815,6 +1826,7 @@ function buildItalianAndMilanBankCatalogServer(indices = getDefaultMarketIndices
       periziaGratuita: true,
       istruttoriaGratuita: true,
       notes: 'Spread competitivo su LTV <= 70% e classi energetiche superiori',
+      sourceUrl: 'https://www.credem.it/content/credem/it/privati/mutui-e-prestiti.html',
       updatedAt
     },
     {
@@ -1835,6 +1847,7 @@ function buildItalianAndMilanBankCatalogServer(indices = getDefaultMarketIndices
       periziaGratuita: true,
       istruttoriaGratuita: true,
       notes: 'Richiesta e delibera digitale con firma elettronica qualificata',
+      sourceUrl: 'https://www.sella.it/banca-online/privati/mutui',
       updatedAt
     },
     {
@@ -1855,6 +1868,7 @@ function buildItalianAndMilanBankCatalogServer(indices = getDefaultMarketIndices
       periziaGratuita: true,
       istruttoriaGratuita: true,
       notes: 'Sede Milano Piazza Meda · Indicizzato Euribor 3M 360gg con opzione passaggio a fisso',
+      sourceUrl: 'https://www.bancobpm.it/privati/mutui/',
       updatedAt
     },
     {
@@ -1875,6 +1889,7 @@ function buildItalianAndMilanBankCatalogServer(indices = getDefaultMarketIndices
       periziaGratuita: true,
       istruttoriaGratuita: true,
       notes: 'Tasso variabile con tetto massimo (CAP) a tutela dai rialzi BCE',
+      sourceUrl: 'https://www.intesasanpaolo.com/it/persone-e-famiglie/prodotti/mutui.html',
       updatedAt
     },
     {
@@ -1895,6 +1910,7 @@ function buildItalianAndMilanBankCatalogServer(indices = getDefaultMarketIndices
       periziaGratuita: true,
       istruttoriaGratuita: true,
       notes: 'Headquarter Milano Piazza Gae Aulenti · Sconto spread per classi energetiche A/B',
+      sourceUrl: 'https://www.unicredit.it/it/privati/mutui.html',
       updatedAt
     },
     {
@@ -1915,6 +1931,7 @@ function buildItalianAndMilanBankCatalogServer(indices = getDefaultMarketIndices
       periziaGratuita: true,
       istruttoriaGratuita: true,
       notes: 'Rete filiali Milano · Tasso variabile con CAP massimo garantito',
+      sourceUrl: 'https://www.credit-agricole.it/privati/mutui',
       updatedAt
     },
     {
@@ -1935,6 +1952,7 @@ function buildItalianAndMilanBankCatalogServer(indices = getDefaultMarketIndices
       periziaGratuita: true,
       istruttoriaGratuita: true,
       notes: 'Maggiore banca cooperativa della Lombardia · Condizioni agevolate Soci BCC Milano e sconto Green',
+      sourceUrl: 'https://www.bccmilano.it/privati/mutui',
       updatedAt
     },
     {
@@ -1955,6 +1973,7 @@ function buildItalianAndMilanBankCatalogServer(indices = getDefaultMarketIndices
       periziaGratuita: true,
       istruttoriaGratuita: true,
       notes: 'Sportelli a Milano e Città Metropolitana · Surroga zero spese e riduzione spread per Soci e Under 36',
+      sourceUrl: 'https://www.bccmilano.it/privati/mutui',
       updatedAt
     }
   ];
@@ -2340,6 +2359,9 @@ function formatMortgageRadarTelegramReport(report, radarSettings = DEFAULT_NOTIF
       lines.push(`   • 📈 Risparmio: <b>€ ${best.monthlySavings.toFixed(2)}/mese</b> | <b>€ ${best.annualSavings.toFixed(0)}/anno</b>`);
       lines.push(`   • 💎 Risparmio Totale (${opp.remainingYears}a): <b>€ ${best.totalRemainingSavings.toLocaleString('it-IT')}</b>`);
       lines.push(`   • 📌 <i>Surroga Zero Spese (L. 40/2007): Perizia e Istruttoria gratuite</i>`);
+      if (best.offer.sourceUrl) {
+        lines.push(`   • 🔗 <a href="${escapeHtml(best.offer.sourceUrl)}">Scheda Ufficiale Mutuo ${bestBank}</a>`);
+      }
 
       const altOffers = (opp.topOffers || []).slice(1, 3).filter(a => a.monthlySavings > 0);
       if (altOffers.length > 0) {

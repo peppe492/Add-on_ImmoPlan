@@ -1049,6 +1049,18 @@ export const PropertyAssetManager: React.FC = () => {
                     </div>
                     <div className="rbc-main">
                       <strong>{best.offer.bankName}</strong> <span className="rbc-city">({best.offer.hqCity})</span> — <em>{best.offer.productName}</em>
+                      {best.offer.sourceUrl && (
+                        <a
+                          href={best.offer.sourceUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="rt-source-link"
+                          style={{ marginLeft: 8 }}
+                          title={`Apri pagina ufficiale mutuo ${best.offer.bankName}`}
+                        >
+                          🔗 Scheda Ufficiale ↗
+                        </a>
+                      )}
                     </div>
                     <div className="rbc-metrics">
                       <span>Nuovo Tasso: <strong className="pos">TAN {best.appliedTan.toFixed(2)}%</strong> (TAEG {best.appliedTaeg.toFixed(2)}%) [<strong>-{best.rateDelta.toFixed(2)}% / -{best.rateDeltaBps} bps</strong>]</span>
@@ -1133,6 +1145,18 @@ export const PropertyAssetManager: React.FC = () => {
                             <div className="rt-bank">
                               <strong>{ev.offer.bankName}</strong>
                               {ev.offer.isMilanFocused && <span className="rt-tag milan">🏙️ Milano</span>}
+                              {ev.offer.sourceUrl && (
+                                <a
+                                  href={ev.offer.sourceUrl}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="rt-source-link"
+                                  title={`Apri sito ufficiale ${ev.offer.bankName}`}
+                                  onClick={(e) => e.stopPropagation()}
+                                >
+                                  🔗 Info ↗
+                                </a>
+                              )}
                             </div>
                             <div className="rt-sub">{ev.offer.hqCity}</div>
                           </td>
@@ -2710,6 +2734,8 @@ const IPB_CSS = `
 .ipb .rt-tag.milan{ background:var(--indigo-soft); color:var(--indigo); }
 .ipb .rt-tag.green{ background:var(--pos-soft); color:var(--pos); }
 .ipb .rt-tag.adv-pill{ display:inline-block; margin-top:2px; background:var(--pos-soft); color:var(--pos); }
+.ipb .rt-source-link{ font-family:var(--mono); font-size:9.5px; font-weight:600; padding:2px 6px; border-radius:4px; text-decoration:none; background:rgba(0,124,255,0.12); color:#38bdf8; border:1px solid rgba(56,189,248,0.3); transition:all 0.15s ease; display:inline-flex; align-items:center; gap:2px; }
+.ipb .rt-source-link:hover{ background:rgba(0,124,255,0.25); color:#fff; border-color:#38bdf8; text-decoration:none; transform:translateY(-1px); }
 .ipb .radar-config-bar{ display:grid; grid-template-columns:repeat(4,1fr); gap:10px; padding:12px; background:var(--inset); border:1px solid var(--border); border-radius:10px; }
 
 @media (max-width:1100px){

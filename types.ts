@@ -513,6 +513,7 @@ export interface BankMortgageOffer {
   periziaGratuita: boolean;
   istruttoriaGratuita: boolean;
   notes?: string;
+  sourceUrl?: string;
   updatedAt: string;
 }
 
